@@ -1,0 +1,100 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-umd}
+      POSTGRES_USER: ${POSTGRES_USER:-umd}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-umd}
+    ports:
+      # Настраиваемый порт хоста (Day 3): по умолчанию 5433, а не
+      # стандартный 5432 — чтобы не конфликтовать с локально
+      # установленным Postgres или другим docker-compose проектом.
+      # Поменять: HOST_POSTGRES_PORT=5432 в .env.
+      - "${HOST_POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-umd}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      # См. комментарий про HOST_POSTGRES_PORT выше — та же идея.
+      - "${HOST_REDIS_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Day 6: локальный Telegram Bot API сервер — поднимает лимит на
+  # отправку файла ботом с 50 МБ (api.telegram.org) до 2000 МБ.
+  # Нужен только если USE_LOCAL_BOT_API=true в .env; если флаг выключен,
+  # контейнер всё равно поднимется (это дёшево), но bot/worker его
+  # просто не будут использовать.
+  #
+  # api_id/api_hash — бесплатная регистрация приложения на
+  # my.telegram.org (НЕ токен бота, отдельная пара). Инструкция в README.
+  telegram-bot-api:
+    image: aiogram/telegram-bot-api:latest
+    environment:
+      # Мягкие дефолты (не ":?required"): этот сервис не должен ронять
+      # весь `docker compose up`, если ты пока не настроил
+      # api_id/api_hash — просто он не будет реально использоваться,
+      # пока USE_LOCAL_BOT_API=false в .env (это читает bot/worker,
+      # не сам этот контейнер).
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:-0}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-0}
+      TELEGRAM_LOCAL: "1"
+    volumes:
+      # ВАЖНО: тот же путь, что worker использует для скачанных файлов
+      # (DOWNLOAD_STORAGE_DIR в worker_settings.py). В режиме локального
+      # сервера Telegram сам читает файл с диска для загрузки — ему
+      # нужно видеть точно тот же путь, что видит worker.
+      - download_storage:/tmp/umd-downloads
+    restart: unless-stopped
+
+  bot:
+    build:
+      context: .
+      dockerfile: infra/docker/bot.Dockerfile
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: infra/docker/bot.Dockerfile
+    # Тот же образ, что и bot (одинаковый код и зависимости), но другая
+    # команда запуска и без entrypoint.sh — миграции применяет только
+    # bot-контейнер при старте. Если оба контейнера будут одновременно
+    # гонять `alembic upgrade head` при старте — это гонка (race condition),
+    # поэтому у worker миграции явно отключены через override entrypoint.
+    entrypoint: []
+    command: ["arq", "src.infrastructure.queue.worker_settings.WorkerSettings"]
+    env_file:
+      - .env
+    volumes:
+      # Общий с telegram-bot-api (см. комментарий там) — только когда
+      # используется локальный сервер, но монтируем всегда: дёшево и
+      # не требует пересборки при переключении USE_LOCAL_BOT_API.
+      - download_storage:/tmp/umd-downloads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  download_storage:
