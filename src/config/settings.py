@@ -48,6 +48,27 @@ class Settings(BaseSettings):
     )
     local_bot_api_base_url: str = Field(default="http://telegram-bot-api:8081")
 
+    # --- Download flow (Day 7) ---
+    # Domain allowlist (SECURITY.md). Suffix match per label, so
+    # "youtube.com" also covers www./m. subdomains. Empty list = allow
+    # every site yt-dlp supports (dev escape hatch only). Override via
+    # env: ALLOWED_DOMAINS='["youtube.com","tiktok.com"]'
+    allowed_domains: list[str] = Field(
+        default=[
+            "youtube.com",
+            "youtu.be",
+            "tiktok.com",
+            "instagram.com",
+            "twitter.com",
+            "x.com",
+            "vk.com",
+        ]
+    )
+    # How long a shown preview stays actionable (the ✅ button under it).
+    # After the TTL the stored URL expires in Redis and the button
+    # politely reports that the preview is stale.
+    preview_context_ttl_seconds: int = Field(default=600)
+
     # Single source of truth for the deliverable file size limit — was
     # previously duplicated as a hardcoded constant in both
     # TelegramNotifier and ProcessDownloadUseCase (a real DRY violation
@@ -90,6 +111,10 @@ class Settings(BaseSettings):
     @property
     def redis_dsn(self) -> str:
         return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+    @property
+    def allowed_domains_set(self) -> frozenset[str]:
+        return frozenset(self.allowed_domains)
 
     @property
     def max_deliverable_file_size_bytes(self) -> int:

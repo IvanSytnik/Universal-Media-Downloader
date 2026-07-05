@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from src.domain.value_objects.enums import MediaType
 from src.domain.value_objects.media_preview import MediaPreview
-from src.presentation.telegram.handlers.preview import _format_preview
+from src.presentation.telegram.formatting import format_preview
 
 
 def _preview(title: str, uploader: str | None = "Some Channel") -> MediaPreview:
@@ -30,23 +30,23 @@ def _preview(title: str, uploader: str | None = "Some Channel") -> MediaPreview:
 
 
 def test_format_preview_escapes_angle_brackets_in_title() -> None:
-    result = _format_preview(_preview("<script>alert(1)</script>"))
+    result = format_preview(_preview("<script>alert(1)</script>"))
     assert "<script>" not in result
     assert "&lt;script&gt;" in result
 
 
 def test_format_preview_escapes_ampersand_in_title() -> None:
-    result = _format_preview(_preview("Tom & Jerry"))
+    result = format_preview(_preview("Tom & Jerry"))
     assert "Tom & Jerry" not in result
     assert "Tom &amp; Jerry" in result
 
 
 def test_format_preview_escapes_uploader() -> None:
-    result = _format_preview(_preview("Normal Title", uploader="<b>Fake Bold</b>"))
+    result = format_preview(_preview("Normal Title", uploader="<b>Fake Bold</b>"))
     assert "<b>Fake Bold</b>" not in result
     assert "&lt;b&gt;Fake Bold&lt;/b&gt;" in result
 
 
 def test_format_preview_handles_missing_uploader() -> None:
-    result = _format_preview(_preview("Normal Title", uploader=None))
+    result = format_preview(_preview("Normal Title", uploader=None))
     assert "неизвестно" in result

@@ -9,10 +9,15 @@ from __future__ import annotations
 
 import asyncio
 
+from aiogram.fsm.storage.redis import RedisStorage
 from arq.connections import RedisSettings, create_pool
+from redis.asyncio import Redis
 
 from src.config.settings import Settings, get_settings
 from src.infrastructure.database.engine import create_engine, create_session_factory
+from src.infrastructure.preview_context.redis_preview_context_store import (
+    RedisPreviewContextStore,
+)
 from src.presentation.telegram.bot import create_bot, create_dispatcher
 from src.shared.logging import configure_logging, get_logger
 
@@ -35,21 +40,33 @@ async def main() -> None:
         )
     )
 
+    # One shared Redis client for both FSM state (aiogram RedisStorage —
+    # survives restarts, ready for multiple bot instances) and the
+    # preview-context store (token → URL for inline confirm buttons).
+    redis_client: Redis = Redis.from_url(settings.redis_dsn)
+    fsm_storage = RedisStorage(redis=redis_client)
+    preview_store = RedisPreviewContextStore(
+        redis=redis_client,
+        ttl_seconds=settings.preview_context_ttl_seconds,
+    )
+
     bot = create_bot(settings)
-    dp = create_dispatcher()
+    dp = create_dispatcher(storage=fsm_storage)
 
     try:
-        # `settings=`, `session_factory=`, `arq_pool=` here are what make
-        # those parameters available by name in any handler (see
-        # handlers/basic.py and handlers/worker.py).
+        # `settings=`, `session_factory=`, `arq_pool=`, `preview_store=`
+        # here are what make those parameters available by name in any
+        # handler (see handlers/basic.py, handlers/download_flow.py).
         await dp.start_polling(
             bot,
             settings=settings,
             session_factory=session_factory,
             arq_pool=arq_pool,
+            preview_store=preview_store,
         )
     finally:
         await arq_pool.close()
+        await redis_client.aclose()
         await engine.dispose()
 
 
