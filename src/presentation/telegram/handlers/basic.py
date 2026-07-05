@@ -20,6 +20,7 @@ from src.config.settings import Settings
 from src.infrastructure.database.engine import session_scope
 from src.infrastructure.database.repositories.user_repository import SqlAlchemyUserRepository
 from src.infrastructure.health import run_health_check
+from src.presentation.telegram.keyboards import main_menu_keyboard
 from src.shared.logging import get_logger
 
 router = Router(name="basic")
@@ -44,14 +45,11 @@ async def handle_start(message: Message, session_factory: async_sessionmaker[Asy
     logger.info("start_command", telegram_id=telegram_id, internal_user_id=str(user.id))
 
     await message.answer(
-        "Привет! Это Universal Media Downloader — сборка Day 5.\n\n"
-        "Ты зарегистрирован в системе. Пока умею:\n"
-        "/ping — проверка, что бот отвечает\n"
-        "/health — проверка подключения к БД и Redis\n"
-        "/worker_ping [текст] — поставить тестовую задачу в очередь воркера\n"
-        "/worker_status — прочитать результат последней обработанной задачи\n"
-        "/preview ссылка — показать информацию о видео БЕЗ скачивания\n"
-        "/download ссылка — скачать и прислать файл"
+        "Привет! Это Universal Media Downloader.\n\n"
+        "Пришли ссылку на видео (YouTube, TikTok, Instagram и другие) — "
+        "покажу превью и скачаю по подтверждению.\n\n"
+        "Или воспользуйся кнопками ниже:",
+        reply_markup=main_menu_keyboard(),
     )
 
 

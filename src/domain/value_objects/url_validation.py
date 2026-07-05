@@ -36,3 +36,40 @@ def validate_url(raw_url: str) -> str:
         raise UnsupportedURLError("Ссылка не содержит домен")
 
     return url
+
+
+def validate_url_against_allowlist(raw_url: str, allowed_domains: frozenset[str]) -> str:
+    """Structural validation + domain allowlist check (SECURITY.md:
+    "allowlist поддерживаемых доменов, а не blacklist").
+
+    Called at the Presentation boundary (handlers), NOT inside use cases —
+    per PROJECT_SPEC §9 input validation happens at the edge, before data
+    enters the Application layer. Use cases keep calling plain
+    `validate_url` as a structural safety net.
+
+    Matching is suffix-based per label: `youtube.com` allows
+    `www.youtube.com` and `m.youtube.com`, but NOT `evilyoutube.com`
+    (which a naive `endswith` would let through).
+
+    An empty allowlist means "allow everything" — a deliberate escape
+    hatch for local development, configured via Settings, never the
+    production default.
+
+    Raises:
+        UnsupportedURLError: structurally invalid URL or domain not allowed.
+    """
+    url = validate_url(raw_url)
+
+    if not allowed_domains:
+        return url
+
+    hostname = (urlparse(url).hostname or "").lower().rstrip(".")
+
+    for domain in allowed_domains:
+        d = domain.lower().lstrip(".")
+        if hostname == d or hostname.endswith("." + d):
+            return url
+
+    raise UnsupportedURLError(
+        "Этот сайт не поддерживается. Поддерживаемые: " + ", ".join(sorted(allowed_domains))
+    )
