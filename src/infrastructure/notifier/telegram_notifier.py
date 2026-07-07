@@ -23,18 +23,21 @@ logger = get_logger(__name__)
 
 
 class TelegramNotifier:
-    def __init__(self, bot: Bot, max_file_size_bytes: int) -> None:
-        """`max_file_size_bytes` is injected, not hardcoded (Day 6 fix):
-        it used to be a module-level constant duplicated here AND in
-        ProcessDownloadUseCase — a real DRY violation, and the exact
-        kind of thing that silently drifts when only one copy gets
-        updated. Now both read the same value from Settings
-        (`max_deliverable_file_size_bytes`), which also changes
-        correctly when a local Bot API server raises the real Telegram
-        limit from 50MB to 2000MB.
+    def __init__(
+        self,
+        bot: Bot,
+        max_file_size_bytes: int,
+        file_upload_timeout_seconds: int,
+    ) -> None:
+        """... (существующий docstring без изменений) ...
+
+        `file_upload_timeout_seconds` overrides aiogram's default 60s
+        request timeout ONLY for the file-upload call. The default is
+        kept for send_text — short calls should still fail fast.
         """
         self._bot = bot
         self._max_file_size_bytes = max_file_size_bytes
+        self._file_upload_timeout_seconds = file_upload_timeout_seconds
 
     async def send_file(
         self, telegram_id: int, file_path: Path, caption: str | None = None
@@ -52,7 +55,10 @@ class TelegramNotifier:
         safe_caption = html_escape(caption) if caption else None
         try:
             await self._bot.send_document(
-                chat_id=telegram_id, document=document, caption=safe_caption
+                chat_id=telegram_id,
+                document=document,
+                caption=safe_caption,
+                request_timeout=self._file_upload_timeout_seconds,
             )
         except TelegramAPIError as exc:
             logger.warning("notifier_send_file_failed", telegram_id=telegram_id, error=str(exc))

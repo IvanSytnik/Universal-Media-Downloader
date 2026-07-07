@@ -42,6 +42,8 @@ logger = get_logger(__name__)
 
 _YDL_OPTS_PREVIEW: dict[str, Any] = {
     "quiet": True,
+    "socket_timeout": 30,
+    "retries": 3,
     "no_warnings": True,
     "noplaylist": True,
     "skip_download": True,
@@ -141,6 +143,10 @@ def _download_worker_entrypoint(
             "format": "best[ext=mp4]/best",
             "merge_output_format": "mp4",
             "restrictfilenames": True,
+            "socket_timeout": 30,
+            "retries": 10,
+            "fragment_retries": 10,
+            "continuedl": True,
             "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
             "post_hooks": [_record_final_filename],
         }

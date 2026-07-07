@@ -69,6 +69,32 @@ class Settings(BaseSettings):
     # politely reports that the preview is stale.
     preview_context_ttl_seconds: int = Field(default=600)
 
+    # --- Rate limiting (Day 8) ---
+    # Downloads are the expensive action (worker CPU, bandwidth, disk),
+    # previews are cheaper but still hit yt-dlp extraction — both are
+    # limited, chat messages themselves are not. Sliding windows,
+    # enforced per telegram user id at the Presentation boundary.
+    rate_limit_downloads_per_hour: int = Field(default=10)
+    rate_limit_previews_per_minute: int = Field(default=5)
+
+    # --- File delivery (Day 8.1 hotfix) ---
+    # Request timeout specifically for uploading the downloaded file to
+    # Telegram. aiogram's default per-request timeout is 60s — a ~1GB
+    # upload to the local Bot API server takes longer, the client gives
+    # up while the server keeps processing, and the user gets an error
+    # followed by the file anyway (false negative, seen 2026-07-05).
+    # 1800s covers the worst case (2GB on a slow disk); a genuinely
+    # stuck job is still killed by the arq job timeout, so this long
+    # timeout cannot hang the worker forever.
+    file_upload_timeout_seconds: int = Field(default=1800)
+
+    # Hard ceiling for one download job (was a hardcoded constant in
+    # ProcessDownloadUseCase — moved here Day 8.2). With retries now
+    # enabled in yt-dlp, a 1-2GB video on a throttled CDN can
+    # legitimately take >10 min; a genuinely stuck process is still
+    # terminate()'d by YtDlpDownloader when this expires.
+    download_timeout_seconds: int = Field(default=1800)
+
     # Single source of truth for the deliverable file size limit — was
     # previously duplicated as a hardcoded constant in both
     # TelegramNotifier and ProcessDownloadUseCase (a real DRY violation
