@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from src.presentation.telegram.handlers.download_flow import _looks_like_url
 from src.presentation.telegram.keyboards import (
+    BTN_DOWNLOAD,
+    BTN_HELP,
     CB_CANCEL_PREFIX,
     CB_CONFIRM_PREFIX,
     main_menu_keyboard,
@@ -17,11 +19,14 @@ from src.presentation.telegram.keyboards import (
 # --- keyboards --------------------------------------------------------------
 
 
-def test_main_menu_has_download_and_help() -> None:
+def test_main_menu_is_persistent_reply_keyboard() -> None:
+    # Day 8: main menu became a persistent bottom ReplyKeyboardMarkup.
     kb = main_menu_keyboard()
-    callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert "flow:download" in callbacks
-    assert "flow:help" in callbacks
+    texts = [b.text for row in kb.keyboard for b in row]
+    assert BTN_DOWNLOAD in texts
+    assert BTN_HELP in texts
+    assert kb.is_persistent is True
+    assert kb.resize_keyboard is True
 
 
 def test_confirm_keyboard_callback_data_fits_telegram_limit() -> None:

@@ -53,11 +53,15 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["downloader"] = YtDlpDownloader()
     ctx["storage"] = LocalFileStorage(base_dir=DOWNLOAD_STORAGE_DIR)
     ctx["max_deliverable_file_size_bytes"] = settings.max_deliverable_file_size_bytes
+    ctx["download_timeout_seconds"] = settings.download_timeout_seconds
 
     notifier_bot = create_telegram_bot(settings)
     ctx["notifier_bot"] = notifier_bot
     ctx["notifier"] = TelegramNotifier(
-        notifier_bot, max_file_size_bytes=settings.max_deliverable_file_size_bytes
+        notifier_bot, 
+        max_file_size_bytes=settings.max_deliverable_file_size_bytes, 
+        file_upload_timeout_seconds=settings.file_upload_timeout_seconds
+
     )
 
 
@@ -82,3 +86,11 @@ class WorkerSettings:
     )
     on_startup = startup
     on_shutdown = shutdown
+    # Must exceed download_timeout_seconds (1800): the download job's
+    # own cooperative timeout in YtDlpDownloader must fire FIRST and
+    # kill the child process cleanly, sending the user a proper error.
+    # If arq's job_timeout (default 300s!) fired first, it would cancel
+    # the coroutine mid-flight with no clean message. +300s margin
+    # covers the final upload to Telegram after the download finishes.
+    job_timeout = 2100
+

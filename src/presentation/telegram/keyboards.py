@@ -11,22 +11,45 @@ callback_data conventions (Telegram hard limit: 64 bytes):
 
 from __future__ import annotations
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
 
 CB_FLOW_DOWNLOAD = "flow:download"
 CB_FLOW_HELP = "flow:help"
 CB_CONFIRM_PREFIX = "dl:"
 CB_CANCEL_PREFIX = "cancel:"
 
+# Reply-keyboard button labels (Day 8). Handlers match on exact text,
+# so these constants are the single source of truth for both the
+# keyboard builder and the handlers — never inline these strings.
+BTN_DOWNLOAD = "⬇️ Скачать"
+BTN_HELP = "ℹ️ Помощь"
 
-def main_menu_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+
+def main_menu_keyboard() -> ReplyKeyboardMarkup:
+    """Persistent bottom keyboard (Day 8).
+
+    Replaces the Day 7 inline main menu in /start: a reply keyboard is
+    always visible, so the user never has to scroll back to the /start
+    message to find the buttons. Inline keyboards remain where they
+    belong — attached to preview cards. The old flow:* callback
+    handlers are kept so buttons under previously sent /start messages
+    keep working.
+    """
+    return ReplyKeyboardMarkup(
+        keyboard=[
             [
-                InlineKeyboardButton(text="⬇️ Скачать", callback_data=CB_FLOW_DOWNLOAD),
-                InlineKeyboardButton(text="ℹ️ Помощь", callback_data=CB_FLOW_HELP),
+                KeyboardButton(text=BTN_DOWNLOAD),
+                KeyboardButton(text=BTN_HELP),
             ]
-        ]
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Пришли ссылку на видео…",
     )
 
 

@@ -17,7 +17,10 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from src.config.settings import get_settings
 from src.infrastructure.database.engine import Base
-from src.infrastructure.database.models import DownloadRequestModel, UserModel  # noqa: F401 — registers models on Base.metadata
+from src.infrastructure.database.models import (  # noqa: F401 — registers models on Base.metadata
+    DownloadRequestModel,
+    UserModel,
+)
 
 config = context.config
 

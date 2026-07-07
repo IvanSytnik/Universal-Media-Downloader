@@ -23,7 +23,6 @@ from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
 
-DOWNLOAD_TIMEOUT_SECONDS = 600
 
 
 class ProcessDownloadUseCase:
@@ -35,6 +34,7 @@ class ProcessDownloadUseCase:
         storage: StoragePort,
         notifier: NotifierPort,
         max_deliverable_file_size_bytes: int,
+        download_timeout_seconds: int,
     ) -> None:
         """`max_deliverable_file_size_bytes` is injected (Day 6 fix): it
         used to be a hardcoded module-level constant here, duplicated
@@ -52,6 +52,7 @@ class ProcessDownloadUseCase:
         self._storage = storage
         self._notifier = notifier
         self._max_deliverable_file_size_bytes = max_deliverable_file_size_bytes
+        self._download_timeout_seconds = download_timeout_seconds
 
     async def execute(self, request_id: UUID) -> None:
         request = await self._download_request_repository.get_by_id(request_id)
@@ -71,7 +72,7 @@ class ProcessDownloadUseCase:
         options = DownloadOptions(
             output_dir=output_dir,
             max_filesize_bytes=self._max_deliverable_file_size_bytes,
-            timeout_seconds=DOWNLOAD_TIMEOUT_SECONDS,
+            timeout_seconds=self._download_timeout_seconds,
         )
 
         try:
@@ -91,7 +92,10 @@ class ProcessDownloadUseCase:
             )
             request.mark_failed()
             await self._download_request_repository.update(request)
-            await self._notifier.send_text(user.telegram_id, f"Скачал, но не смог отправить: {exc}")
+            await self._notifier.send_text(
+                user.telegram_id,
+                "Скачал видео, но не смог отправить его в Telegram. Попробуй ещё раз позже.",
+            )
             return
 
         request.mark_done()

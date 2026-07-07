@@ -49,9 +49,9 @@ async def download_job(ctx: dict[str, Any], request_id: str) -> None:
             storage=ctx["storage"],
             notifier=ctx["notifier"],
             max_deliverable_file_size_bytes=ctx["max_deliverable_file_size_bytes"],
+            download_timeout_seconds=ctx["download_timeout_seconds"],
         )
         await use_case.execute(UUID(request_id))
-
 
 async def cleanup_expired_downloads_job(ctx: dict[str, Any]) -> None:
     """Runs on a cron schedule (see worker_settings.py) — not triggered

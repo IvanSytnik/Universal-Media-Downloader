@@ -11,7 +11,7 @@ from __future__ import annotations
 from html import escape as html_escape
 
 from aiogram import Router
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -20,6 +20,7 @@ from src.config.settings import Settings
 from src.infrastructure.database.engine import session_scope
 from src.infrastructure.database.repositories.user_repository import SqlAlchemyUserRepository
 from src.infrastructure.health import run_health_check
+from src.presentation.telegram.formatting import format_help
 from src.presentation.telegram.keyboards import main_menu_keyboard
 from src.shared.logging import get_logger
 
@@ -44,13 +45,23 @@ async def handle_start(message: Message, session_factory: async_sessionmaker[Asy
 
     logger.info("start_command", telegram_id=telegram_id, internal_user_id=str(user.id))
 
+    # main_menu_keyboard() is now a persistent ReplyKeyboardMarkup
+    # (Day 8) — it stays at the bottom of the chat permanently, so the
+    # greeting no longer needs to point at buttons "below this message".
     await message.answer(
         "Привет! Это Universal Media Downloader.\n\n"
         "Пришли ссылку на видео (YouTube, TikTok, Instagram и другие) — "
         "покажу превью и скачаю по подтверждению.\n\n"
-        "Или воспользуйся кнопками ниже:",
+        "Кнопки внизу экрана всегда под рукой: «⬇️ Скачать» и «ℹ️ Помощь».",
         reply_markup=main_menu_keyboard(),
     )
+
+
+@router.message(Command("help"))
+async def handle_help(message: Message, settings: Settings) -> None:
+    # Single help text for /help, the ℹ️ reply button and the legacy
+    # inline button — built in formatting.format_help from Settings.
+    await message.answer(format_help(settings))
 
 
 @router.message(lambda m: m.text == "/ping")

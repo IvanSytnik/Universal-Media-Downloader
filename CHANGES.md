@@ -1,76 +1,77 @@
-# Day 7 — Кнопки, единый флоу «превью → подтверждение → скачивание», allowlist доменов
-
-## Что нового
-
-1. **`/start` с inline-кнопками** [⬇️ Скачать] [ℹ️ Помощь].
-2. **Единый флоу**: кнопка «Скачать» → «пришли ссылку» → превью с кнопками
-   [✅ Скачать] [❌ Отмена] → очередь → файл. Плюс: голая ссылка сообщением
-   (без команд и кнопок) сразу запускает превью.
-3. **FSM на RedisStorage** — состояние «жду ссылку» переживает рестарт бота.
-4. **PreviewContextStore** — URL хранится в Redis по короткому токену
-   (callback_data лимит 64 байта), TTL 10 минут; протухшая кнопка отвечает
-   «превью устарело», повторный тап ✅ не создаёт дубль скачивания.
-5. **Allowlist доменов** (SECURITY.md): по умолчанию YouTube, youtu.be,
-   TikTok, Instagram, Twitter/X, VK. Переопределяется через env.
-   Проверка — на границе Presentation; use cases не менялись.
-6. `/preview` и `/download` работают как раньше.
+# Day 8 — Rate limiting, постоянная клавиатура, /help
 
 ## Интеграция
 
 ```bash
-cd путь/к/проекту
-unzip -o umd-day7-patch.zip
+cd путь/к/umd
+unzip -o umd_day8_patch.zip
 docker compose up -d --build bot
 ```
 
-Миграций БД нет. Новых контейнеров нет. Новых переменных в .env не требуется
-(всё имеет дефолты).
+Миграций БД нет. Новые настройки имеют дефолты — `.env` менять не обязательно.
 
-## Новые настройки (опционально, в .env)
+## Новые файлы
 
-```
-# JSON-список; пустой список [] = разрешить все сайты (только для dev!)
-ALLOWED_DOMAINS=["youtube.com","youtu.be","tiktok.com","instagram.com","twitter.com","x.com","vk.com"]
-PREVIEW_CONTEXT_TTL_SECONDS=600
-```
+- `src/domain/interfaces/rate_limiter.py` — `RateLimiterPort` + `RateLimitResult`.
+  Лимиты — аргументы вызова, не состояние лимитера (задел под тарифы Phase 4).
+- `src/infrastructure/rate_limit/__init__.py`
+- `src/infrastructure/rate_limit/redis_rate_limiter.py` — sliding window на ZSET
+  (точный лимит без краевого 2×-эффекта fixed window). Отклонённые попытки НЕ
+  записываются — долбёжка не отодвигает разблокировку. `retry_after` из самого
+  старого события окна.
+- `tests/unit/test_rate_limiter.py` — 6 тестов (fake Redis с реальной
+  ZSET-семантикой).
+- `tests/unit/test_help_formatting.py` — 5 тестов.
 
-## Файлы
+## Изменённые файлы
 
-Новые:
-- src/domain/interfaces/preview_context_store.py — порт token→URL
-- src/infrastructure/preview_context/{__init__,redis_preview_context_store}.py
-- src/presentation/telegram/keyboards.py — inline-клавиатуры
-- src/presentation/telegram/states.py — FSM DownloadFlow.waiting_for_url
-- src/presentation/telegram/formatting.py — общий формат превью
-  (вынесен из preview.py: теперь нужен двум хендлерам, DRY)
-- src/presentation/telegram/handlers/download_flow.py — весь новый флоу
-- tests/unit/test_url_allowlist.py, test_preview_context_store.py,
-  test_download_flow.py
+- `src/config/settings.py` — `rate_limit_downloads_per_hour=10`,
+  `rate_limit_previews_per_minute=5`. Переопределяются через env
+  (`RATE_LIMIT_DOWNLOADS_PER_HOUR=...`).
+- `src/presentation/telegram/keyboards.py` — `main_menu_keyboard()` теперь
+  постоянная нижняя `ReplyKeyboardMarkup` («⬇️ Скачать» / «ℹ️ Помощь»,
+  `is_persistent`, placeholder в поле ввода). Константы `BTN_DOWNLOAD`/`BTN_HELP`.
+- `src/presentation/telegram/formatting.py` — `format_help(settings)`:
+  платформы генерируются из allowlist, лимиты из настроек (док не разъезжается
+  с поведением); `format_retry_after` (минуты округляются вверх).
+- `src/presentation/telegram/handlers/download_flow.py`:
+  - текстовые хендлеры кнопок reply-клавиатуры (зарегистрированы ДО
+    FSM-хендлера — «ℹ️ Помощь» в состоянии waiting_for_url показывает помощь,
+    а не «Некорректная ссылка»);
+  - preview-лимит в `_show_preview` (обе точки входа одной проверкой);
+    валидация URL идёт ДО лимита — опечатка не сжигает слот;
+  - download-лимит в ✅-confirm; порядок: токен → лимит → consume — отказ по
+    лимиту не сжигает превью, после кулдауна та же кнопка работает;
+  - старые inline-хендлеры `flow:*` сохранены (кнопки под старыми /start
+    работают), захардкоженный `_HELP_TEXT` удалён.
+- `src/presentation/telegram/handlers/download.py` — тот же download-лимит в
+  `/download`, общий namespace ключа `download:<id>` с confirm-кнопкой (две
+  точки входа не складываются в двойной лимит).
+- `src/presentation/telegram/handlers/basic.py` — `/help`; текст `/start`
+  обновлён под постоянную клавиатуру.
+- `src/main.py` — DI `rate_limiter`, `bot.set_my_commands(...)` (синяя
+  menu-кнопка: start/download/preview/help).
+- `tests/unit/test_download_flow.py` — тест меню обновлён под reply-клавиатуру.
+- `infra/alembic/env.py` — попутный фикс сортировки импортов (ruff I001,
+  был в baseline).
 
-Изменённые:
-- src/config/settings.py — allowed_domains, preview_context_ttl_seconds
-- src/domain/value_objects/url_validation.py — validate_url_against_allowlist
-  (суффикс по меткам: youtube.com покрывает www./m., но НЕ evilyoutube.com)
-- src/presentation/telegram/handlers/basic.py — /start с кнопками
-- src/presentation/telegram/handlers/preview.py — формат превью из общего модуля
-- src/presentation/telegram/bot.py — FSM storage, download_flow_router
-  подключён ПОСЛЕДНИМ (иначе перехватывал бы команды со ссылками)
-- src/main.py — Redis-клиент, RedisStorage, preview_store в start_polling
-- tests/unit/test_preview_formatting.py — импорт из formatting.py
+## Известный компромисс
 
-## Ключевые решения
+`RedisRateLimiter.acquire` — check и record двумя командами (не Lua): два
+строго одновременных запроса одного юзера на границе лимита могут дать +1
+событие. Для per-user Telegram-трафика недостижимо; если понадобится для REST
+API (Phase 5) — маленький EVAL за тем же портом, вызывающий код не меняется.
 
-- **FSM в Redis, не в памяти**: рестарт бота не сбрасывает «жду ссылку»;
-  готово к нескольким инстансам бота (Phase 7).
-- **Токен вместо URL в callback_data**: лимит Telegram 64 байта. uuid4.hex
-  (32 символа) + TTL = заодно защита от протухших кнопок и от дублей
-  (токен удаляется ДО постановки в очередь).
-- **Allowlist на границе Presentation**, use cases зовут прежний
-  структурный validate_url — сигнатуры Application-слоя не тронуты.
-- **_looks_like_url — роутинг, не валидация**: только http(s)://-префикс,
-  чтобы обычный текст («привет») молча игнорировался, а не получал
-  ошибку валидации.
+## Квалити-гейт
 
-## Проверено
+pytest: **116 passed** (было 105, +11) · ruff: чисто · mypy strict (src): чисто.
 
-pytest: 105 passed (было 79) · ruff: clean · mypy strict: clean
+## Ручной smoke-чеклист
+
+1. `/start` — снизу постоянная клавиатура, в поле ввода placeholder.
+2. «ℹ️ Помощь» и `/help` — одинаковый текст с платформами и лимитами.
+3. 6 превью подряд за минуту — шестое отбивается «Попробуй через N сек».
+4. 11-е скачивание за час — alert «Лимит исчерпан…», превью НЕ сгорает:
+   после ожидания ✅ на той же карточке работает.
+5. Синяя menu-кнопка слева от поля ввода — 4 команды.
+docker compose up --build

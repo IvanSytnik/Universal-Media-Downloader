@@ -31,6 +31,7 @@ from src.application.use_cases.request_download import RequestDownloadUseCase
 from src.config.settings import Settings
 from src.domain.exceptions import ExtractionError, UnsupportedURLError
 from src.domain.interfaces.preview_context_store import PreviewContextStorePort
+from src.domain.interfaces.rate_limiter import RateLimiterPort
 from src.domain.value_objects.url_validation import validate_url_against_allowlist
 from src.infrastructure.database.engine import session_scope
 from src.infrastructure.database.repositories.download_request_repository import (
@@ -39,8 +40,14 @@ from src.infrastructure.database.repositories.download_request_repository import
 from src.infrastructure.database.repositories.user_repository import SqlAlchemyUserRepository
 from src.infrastructure.downloader.ytdlp_downloader import YtDlpDownloader
 from src.infrastructure.queue.arq_task_queue import ArqTaskQueue
-from src.presentation.telegram.formatting import format_preview
+from src.presentation.telegram.formatting import (
+    format_help,
+    format_preview,
+    format_retry_after,
+)
 from src.presentation.telegram.keyboards import (
+    BTN_DOWNLOAD,
+    BTN_HELP,
     CB_CANCEL_PREFIX,
     CB_CONFIRM_PREFIX,
     CB_FLOW_DOWNLOAD,
@@ -52,19 +59,6 @@ from src.shared.logging import get_logger
 
 router = Router(name="download_flow")
 logger = get_logger(__name__)
-
-_HELP_TEXT = (
-    "Я скачиваю видео по ссылке с поддерживаемых сайтов "
-    "(YouTube, TikTok, Instagram, Twitter/X, VK и другие).\n\n"
-    "Как пользоваться:\n"
-    "1. Нажми «⬇️ Скачать» или просто пришли ссылку сообщением.\n"
-    "2. Я покажу превью — название, автора, длительность.\n"
-    "3. Нажми «✅ Скачать» под превью, и я пришлю файл сюда же.\n\n"
-    "Команды:\n"
-    "/preview ссылка — только информация о видео\n"
-    "/download ссылка — скачать сразу, без превью"
-)
-
 
 def _looks_like_url(text: str) -> bool:
     """Cheap Presentation-level routing check, NOT validation.
@@ -84,16 +78,34 @@ async def _show_preview(
     url: str,
     settings: Settings,
     preview_store: PreviewContextStorePort,
+    rate_limiter: RateLimiterPort,
 ) -> None:
     """Shared preview step for both entry points (button flow and
-    direct paste). Validates against the allowlist, fetches metadata,
-    replies with a preview card + confirm/cancel buttons.
+    direct paste). Validates against the allowlist, checks the preview
+    rate limit, fetches metadata, replies with a preview card +
+    confirm/cancel buttons.
+
+    Rate limit sits here (not in a middleware) so the two entry points
+    are covered by one check — DRY — and ordinary chat messages are
+    never limited. Validation runs BEFORE the limit check so a typo in
+    a URL doesn't burn a preview slot.
     """
     try:
         validated_url = validate_url_against_allowlist(url, settings.allowed_domains_set)
     except UnsupportedURLError as exc:
         await message.answer(f"Некорректная ссылка: {html_escape(str(exc))}")
         return
+
+    if message.from_user is not None:
+        verdict = await rate_limiter.acquire(
+            key=f"preview:{message.from_user.id}",
+            limit=settings.rate_limit_previews_per_minute,
+            window_seconds=60,
+        )
+        if not verdict.allowed:
+            logger.info("preview_rate_limited", telegram_id=message.from_user.id)
+            await message.answer(format_retry_after(verdict.retry_after_seconds))
+            return
 
     status_message = await message.answer("🔍 Получаю информацию о видео…")
 
@@ -119,6 +131,21 @@ async def _show_preview(
 
 
 # --- Entry point 1: main-menu buttons -------------------------------------
+# Day 8: the main menu is now a persistent ReplyKeyboardMarkup, so the
+# primary handlers match on button TEXT. The flow:* callback handlers
+# below are kept for inline buttons under /start messages sent before
+# the migration — same behaviour, different trigger.
+
+
+@router.message(F.text == BTN_DOWNLOAD)
+async def handle_download_reply_button(message: Message, state: FSMContext) -> None:
+    await state.set_state(DownloadFlow.waiting_for_url)
+    await message.answer("Пришли ссылку на видео — покажу превью перед скачиванием.")
+
+
+@router.message(F.text == BTN_HELP)
+async def handle_help_reply_button(message: Message, settings: Settings) -> None:
+    await message.answer(format_help(settings))
 
 
 @router.callback_query(F.data == CB_FLOW_DOWNLOAD)
@@ -132,9 +159,9 @@ async def handle_download_button(callback: CallbackQuery, state: FSMContext) -> 
 
 
 @router.callback_query(F.data == CB_FLOW_HELP)
-async def handle_help_button(callback: CallbackQuery) -> None:
+async def handle_help_button(callback: CallbackQuery, settings: Settings) -> None:
     if isinstance(callback.message, Message):
-        await callback.message.answer(_HELP_TEXT)
+        await callback.message.answer(format_help(settings))
     await callback.answer()
 
 
@@ -144,12 +171,15 @@ async def handle_url_in_state(
     state: FSMContext,
     settings: Settings,
     preview_store: PreviewContextStorePort,
+    rate_limiter: RateLimiterPort,
 ) -> None:
     # Clear the state unconditionally BEFORE processing: whatever the
     # user sent, they are out of "waiting" mode — no trap where every
     # subsequent message keeps producing "Некорректная ссылка".
     await state.clear()
-    await _show_preview(message, (message.text or "").strip(), settings, preview_store)
+    await _show_preview(
+        message, (message.text or "").strip(), settings, preview_store, rate_limiter
+    )
 
 
 # --- Entry point 2: a plain URL pasted without any button/command ---------
@@ -160,11 +190,14 @@ async def handle_plain_url(
     message: Message,
     settings: Settings,
     preview_store: PreviewContextStorePort,
+    rate_limiter: RateLimiterPort,
 ) -> None:
     # This router is included LAST in the dispatcher (see bot.py), so
     # commands like "/preview https://..." never reach here — command
     # handlers win first. Only bare URLs land in this handler.
-    await _show_preview(message, (message.text or "").strip(), settings, preview_store)
+    await _show_preview(
+        message, (message.text or "").strip(), settings, preview_store, rate_limiter
+    )
 
 
 # --- Preview card buttons ---------------------------------------------------
@@ -176,6 +209,8 @@ async def handle_confirm_download(
     session_factory: async_sessionmaker[AsyncSession],
     arq_pool: ArqRedis,
     preview_store: PreviewContextStorePort,
+    settings: Settings,
+    rate_limiter: RateLimiterPort,
 ) -> None:
     token = (callback.data or "")[len(CB_CONFIRM_PREFIX):]
     url = await preview_store.get(token)
@@ -188,7 +223,23 @@ async def handle_confirm_download(
         )
         return
 
-    # Consume the token first: a second tap on ✅ while the first one is
+    # Order matters here (Day 8): token existence is checked above,
+    # the rate limit next, and only then is the token consumed. A
+    # rate-limited tap must NOT burn the preview — after the cooldown
+    # the same ✅ button should still work (until the preview TTL).
+    verdict = await rate_limiter.acquire(
+        key=f"download:{callback.from_user.id}",
+        limit=settings.rate_limit_downloads_per_hour,
+        window_seconds=3600,
+    )
+    if not verdict.allowed:
+        logger.info("download_rate_limited", telegram_id=callback.from_user.id)
+        await callback.answer(
+            format_retry_after(verdict.retry_after_seconds), show_alert=True
+        )
+        return
+
+    # Consume the token: a second tap on ✅ while the first one is
     # still processing must not enqueue a duplicate download.
     await preview_store.delete(token)
 
