@@ -93,4 +93,3 @@ class WorkerSettings:
     # the coroutine mid-flight with no clean message. +300s margin
     # covers the final upload to Telegram after the download finishes.
     job_timeout = 2100
-

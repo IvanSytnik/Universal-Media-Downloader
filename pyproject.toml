@@ -5,6 +5,8 @@ description = "Production-ready Telegram media downloader — SaaS-oriented arch
 requires-python = ">=3.13"
 dependencies = [
     "aiogram>=3.7,<4.0",
+    "aiogram-i18n>=1.4",
+    "fluent.runtime>=0.4",
     "pydantic>=2.7,<3.0",
     "pydantic-settings>=2.3,<3.0",
     "structlog>=24.1",

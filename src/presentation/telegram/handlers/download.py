@@ -1,10 +1,4 @@
-"""/download <url> — the real thing: enqueues an actual download.
-
-Returns immediately (the handler only touches the DB and the queue —
-see RequestDownloadUseCase). The worker sends the file directly to the
-user later via NotifierPort, not through this handler — that's why
-there's no "wait for the result" logic here.
-"""
+"""/download <url> — enqueues an actual download. Day 9: localized."""
 
 from __future__ import annotations
 
@@ -12,6 +6,7 @@ from html import escape as html_escape
 
 from aiogram import Router
 from aiogram.types import Message
+from aiogram_i18n import I18nContext
 from arq import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -35,6 +30,7 @@ logger = get_logger(__name__)
 @router.message(lambda m: m.text is not None and m.text.startswith("/download"))
 async def handle_download(
     message: Message,
+    i18n: I18nContext,
     session_factory: async_sessionmaker[AsyncSession],
     arq_pool: ArqRedis,
     settings: Settings,
@@ -46,15 +42,12 @@ async def handle_download(
     text = message.text or ""
     parts = text.split(maxsplit=1)
     if len(parts) < 2:
-        await message.answer("Использование: /download ссылка")
+        await message.answer(i18n.get("download-usage"))
         return
 
     url = parts[1].strip()
     telegram_id = message.from_user.id
 
-    # Same sliding window as the ✅ confirm button — one shared key
-    # namespace ("download:<id>"), so the two entry points can't be
-    # combined to double the effective limit.
     verdict = await rate_limiter.acquire(
         key=f"download:{telegram_id}",
         limit=settings.rate_limit_downloads_per_hour,
@@ -62,7 +55,7 @@ async def handle_download(
     )
     if not verdict.allowed:
         logger.info("download_rate_limited", telegram_id=telegram_id)
-        await message.answer(format_retry_after(verdict.retry_after_seconds))
+        await message.answer(format_retry_after(i18n, verdict.retry_after_seconds))
         return
 
     async with session_scope(session_factory) as session:
@@ -74,12 +67,8 @@ async def handle_download(
         try:
             request = await use_case.execute(telegram_id, url)
         except UnsupportedURLError as exc:
-            await message.answer(f"Некорректная ссылка: {html_escape(str(exc))}")
+            await message.answer(i18n.get("error-bad-url", reason=html_escape(str(exc))))
             return
 
     logger.info("download_requested", request_id=str(request.id), telegram_id=telegram_id)
-    await message.answer(
-        "Скачивание начато — это может занять от нескольких секунд до нескольких минут "
-        "в зависимости от размера видео.\n"
-        "Пришлю файл сюда же, когда будет готово."
-    )
+    await message.answer(i18n.get("download-started"))

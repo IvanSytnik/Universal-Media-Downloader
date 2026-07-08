@@ -48,6 +48,13 @@ class Settings(BaseSettings):
     )
     local_bot_api_base_url: str = Field(default="http://telegram-bot-api:8081")
 
+    # --- i18n (Day 9) ---
+    # Последний fallback локали, когда у юзера нет ни override, ни
+    # распознаваемого Telegram language_code. Держим тут, т.к.
+    # SUPPORTED_LOCALES всё равно код (новые FTL + переводы кнопок), а
+    # это — единственный конфигурируемый параметр локализации.
+    default_locale: str = Field(default="en")
+
     # --- Download flow (Day 7) ---
     # Domain allowlist (SECURITY.md). Suffix match per label, so
     # "youtube.com" also covers www./m. subdomains. Empty list = allow
@@ -155,3 +162,4 @@ def get_settings() -> Settings:
     without relying on environment variables being set at import time.
     """
     return Settings()  # type: ignore[call-arg]  # fields are populated from env, not call args
+ 

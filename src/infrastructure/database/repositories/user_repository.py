@@ -16,17 +16,12 @@ def _to_entity(model: UserModel) -> User:
         id=model.id,
         telegram_id=model.telegram_id,
         is_premium=model.is_premium,
+        language=model.language,
         created_at=model.created_at,
     )
 
 
 class SqlAlchemyUserRepository:
-    """Implements domain.interfaces.user_repository.UserRepository.
-
-    No explicit inheritance (Protocol is structural) — this class satisfies
-    the interface by having matching method signatures, checked by mypy.
-    """
-
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
@@ -45,7 +40,18 @@ class SqlAlchemyUserRepository:
             id=user.id,
             telegram_id=user.telegram_id,
             is_premium=user.is_premium,
+            language=user.language,
         )
         self._session.add(model)
         await self._session.flush()
         return user
+
+    async def set_language(self, telegram_id: int, language: str | None) -> User | None:
+        stmt = select(UserModel).where(UserModel.telegram_id == telegram_id)
+        result = await self._session.execute(stmt)
+        model = result.scalar_one_or_none()
+        if model is None:
+            return None
+        model.language = language
+        await self._session.flush()
+        return _to_entity(model)

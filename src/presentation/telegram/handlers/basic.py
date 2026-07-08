@@ -1,9 +1,11 @@
-"""Basic handlers: /start, /ping, /health.
+"""Basic handlers: /start, /help, /ping, /health.
 
-`/start` is no longer just a greeting (Day 2) — it registers the user
-via RegisterUserUseCase. It still doesn't contain business logic itself:
-it extracts input, calls the use case, formats the reply. That's the
-whole job of a Presentation-layer handler.
+Day 9: all replies are localized via the injected ``i18n`` context (the
+I18nMiddleware puts it in workflow data under the key ``i18n``, so it's
+available by name in any handler, exactly like ``settings``). ``/start``
+additionally seeds the new user's ``language`` from the Telegram
+``language_code`` so a first-time user is greeted in their own language
+even before any explicit ``/language`` choice exists.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from html import escape as html_escape
 from aiogram import Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
+from aiogram_i18n import I18nContext
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.application.use_cases.register_user import RegisterUserUseCase
@@ -29,39 +32,49 @@ logger = get_logger(__name__)
 
 
 @router.message(CommandStart())
-async def handle_start(message: Message, session_factory: async_sessionmaker[AsyncSession]) -> None:
-    # `session_factory` is injected the same way `settings` is — via
-    # dp.start_polling(bot, session_factory=..., settings=...) in main.py.
+async def handle_start(
+    message: Message,
+    i18n: I18nContext,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
     if message.from_user is None:
-        # Telegram messages can technically arrive without a `from_user`
-        # (e.g. channel posts). We only handle user DMs here.
         return
 
     telegram_id = message.from_user.id
+    # Seed the persisted language from Telegram's reported UI language.
+    # ``i18n.locale`` is already the resolved locale for this update
+    # (override → language_code → default), so storing it makes the
+    # user's first implicit choice durable for future non-Telegram
+    # clients too (Web/API have no language_code to fall back on).
+    language = i18n.locale
 
     async with session_scope(session_factory) as session:
         use_case = RegisterUserUseCase(SqlAlchemyUserRepository(session))
-        user = await use_case.execute(telegram_id)
+        user = await use_case.execute(telegram_id, language=language)
 
-    logger.info("start_command", telegram_id=telegram_id, internal_user_id=str(user.id))
+    logger.info(
+        "start_command",
+        telegram_id=telegram_id,
+        internal_user_id=str(user.id),
+        # Diagnostic (Day 9.2): what Telegram reported vs what we resolved.
+        # Confirms locale selection from real traffic — the language_code
+        # a client sends often differs from its UI language, which is why
+        # /language (explicit override) exists.
+        telegram_language_code=(
+            message.from_user.language_code if message.from_user else None
+        ),
+        resolved_locale=i18n.locale,
+    )
 
-    # main_menu_keyboard() is now a persistent ReplyKeyboardMarkup
-    # (Day 8) — it stays at the bottom of the chat permanently, so the
-    # greeting no longer needs to point at buttons "below this message".
     await message.answer(
-        "Привет! Это Universal Media Downloader.\n\n"
-        "Пришли ссылку на видео (YouTube, TikTok, Instagram и другие) — "
-        "покажу превью и скачаю по подтверждению.\n\n"
-        "Кнопки внизу экрана всегда под рукой: «⬇️ Скачать» и «ℹ️ Помощь».",
-        reply_markup=main_menu_keyboard(),
+        i18n.get("start-greeting"),
+        reply_markup=main_menu_keyboard(i18n),
     )
 
 
 @router.message(Command("help"))
-async def handle_help(message: Message, settings: Settings) -> None:
-    # Single help text for /help, the ℹ️ reply button and the legacy
-    # inline button — built in formatting.format_help from Settings.
-    await message.answer(format_help(settings))
+async def handle_help(message: Message, i18n: I18nContext, settings: Settings) -> None:
+    await message.answer(format_help(i18n, settings))
 
 
 @router.message(lambda m: m.text == "/ping")
@@ -70,28 +83,17 @@ async def handle_ping(message: Message) -> None:
 
 
 @router.message(lambda m: m.text == "/health")
-async def handle_health(message: Message, settings: Settings) -> None:
-    # `settings` is injected by aiogram via workflow data — see main.py,
-    # where it's passed into dp.start_polling(bot, settings=settings).
-    # Never instantiate Settings() inside a handler: it would re-read
-    # the environment on every message instead of using the single
-    # instance created once at startup.
+async def handle_health(message: Message, i18n: I18nContext, settings: Settings) -> None:
     status = await run_health_check(settings)
 
-    # Exception messages are not fully under our control (driver/library
-    # text) — escape before inserting into an HTML parse_mode message,
-    # same reasoning as preview.py and worker.py.
     postgres_error = html_escape(status.postgres_error) if status.postgres_error else None
     redis_error = html_escape(status.redis_error) if status.redis_error else None
+    ok = i18n.get("health-ok")
 
     lines = [
-        f"Postgres: {'✅ OK' if status.postgres_ok else f'❌ {postgres_error}'}",
-        f"Redis: {'✅ OK' if status.redis_ok else f'❌ {redis_error}'}",
+        i18n.get("health-postgres", status=ok if status.postgres_ok else f"❌ {postgres_error}"),
+        i18n.get("health-redis", status=ok if status.redis_ok else f"❌ {redis_error}"),
     ]
     await message.answer("\n".join(lines))
 
-    logger.info(
-        "health_check",
-        postgres_ok=status.postgres_ok,
-        redis_ok=status.redis_ok,
-    )
+    logger.info("health_check", postgres_ok=status.postgres_ok, redis_ok=status.redis_ok)

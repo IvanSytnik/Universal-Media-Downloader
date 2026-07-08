@@ -1,77 +1,76 @@
-# Day 8 — Rate limiting, постоянная клавиатура, /help
+# Day 9.2 — команда /language + диагностика локали
 
-## Интеграция
+## Зачем (по итогам live-теста 9.1)
+Ты переключал язык клиента, но всё приходило на русском. Диагноз (в
+изоляции воспроизведён): код выбора локали работает верно — Telegram
+кладёт в апдейт `from_user.language_code="ru"` НЕЗАВИСИМО от языка UI
+приложения, и его нельзя надёжно поменять со стороны клиента. Значит
+автоопределение (language_code → default) может «залипить» юзера на
+языке, который он не может сменить. Единственный надёжный механизм —
+явная команда переключения. Инфраструктура под неё была заложена ещё в
+Day 9 (`manager.set_locale` + Redis-путь + `UserRepository.set_language`),
+поэтому это замыкание этапа, а не новый скоуп.
 
-```bash
-cd путь/к/umd
-unzip -o umd_day8_patch.zip
-docker compose up -d --build bot
-```
+## Что добавлено
 
-Миграций БД нет. Новые настройки имеют дефолты — `.env` менять не обязательно.
+### /language — переключатель языка
+- `src/presentation/telegram/handlers/language.py` (новый):
+  - `/language` → сообщение с inline-кнопками 🇷🇺/🇬🇧. Текст-приглашение
+    двуязычное (понятно на любой текущей локали).
+  - callback `lang:<locale>` (payload — голый код локали,
+    язык-независим, как остальные callback_data):
+    1. **Redis** через `i18n.set_locale(chosen)` — hot-path кэш, который
+       читает менеджер на КАЖДОМ апдейте → смена вступает в силу со
+       СЛЕДУЮЩЕГО апдейта.
+    2. **Postgres** через `set_language(telegram_id, chosen)` — durable,
+       переживает вытеснение из Redis.
+    3. Подтверждение НА НОВОМ языке (локаль передаётся в `get` явно —
+       контекст этого апдейта ещё держит старую локаль) + перерисовка
+       нижней клавиатуры на новом языке.
+  - Пишем ОБА хранилища: только Redis → выбор молча откатится на
+    eviction; только Postgres → менеджер (читает Redis, не БД в горячем
+    пути) не увидит до ре-варма. Оба = консистентность.
+- `keyboards.py`: `+ language_picker_keyboard(i18n)`, `+ CB_LANG_PREFIX`.
+  `main_menu_keyboard(i18n, locale=None)` — опциональная явная локаль
+  (нужна сразу после смены, когда контекст ещё на старой локали).
+- `bot.py`: `language_router` подключён (после basic, до download_flow).
+- `main.py`: `/language` добавлена в локализованное меню команд.
+- FTL (ru+en): `language-prompt`, `btn-lang-ru`, `btn-lang-en`,
+  `language-changed`, `cmd-language`.
 
-## Новые файлы
+### Диагностика локали
+- `handlers/basic.py`: в лог `start_command` добавлены
+  `telegram_language_code` (что реально прислал Telegram) и
+  `resolved_locale` (что срезолвилось). Разовая проверка гипотезы из
+  реального трафика — увидишь `telegram_language_code=ru` в логе.
+  Оставлено как штатная диагностика.
 
-- `src/domain/interfaces/rate_limiter.py` — `RateLimiterPort` + `RateLimitResult`.
-  Лимиты — аргументы вызова, не состояние лимитера (задел под тарифы Phase 4).
-- `src/infrastructure/rate_limit/__init__.py`
-- `src/infrastructure/rate_limit/redis_rate_limiter.py` — sliding window на ZSET
-  (точный лимит без краевого 2×-эффекта fixed window). Отклонённые попытки НЕ
-  записываются — долбёжка не отодвигает разблокировку. `retry_after` из самого
-  старого события окна.
-- `tests/unit/test_rate_limiter.py` — 6 тестов (fake Redis с реальной
-  ZSET-семантикой).
-- `tests/unit/test_help_formatting.py` — 5 тестов.
+## Live-проверка (не «на глаз», прогнано в песочнице)
+Сквозной сценарий через реальный I18nMiddleware + хендлер:
+`/start` при language_code=ru → показывает **ru** → выбор 🇬🇧 English →
+Redis получает `umd:locale:42=en` → следующий `/start` резолвится в
+**en**. Подтверждено программно (assert before==ru, after==en).
 
-## Изменённые файлы
+## Тесты (+5, итого 33 в песочном срезе)
+- `test_language_switch.py`: override вступает в силу на следующем
+  get_locale; per-user изоляция; переключение туда-обратно.
+- `test_language_keyboard.py`: picker содержит обе локали с голыми
+  кодами; меню рендерится в явной локали / в контекстной без override.
 
-- `src/config/settings.py` — `rate_limit_downloads_per_hour=10`,
-  `rate_limit_previews_per_minute=5`. Переопределяются через env
-  (`RATE_LIMIT_DOWNLOADS_PER_HOUR=...`).
-- `src/presentation/telegram/keyboards.py` — `main_menu_keyboard()` теперь
-  постоянная нижняя `ReplyKeyboardMarkup` («⬇️ Скачать» / «ℹ️ Помощь»,
-  `is_persistent`, placeholder в поле ввода). Константы `BTN_DOWNLOAD`/`BTN_HELP`.
-- `src/presentation/telegram/formatting.py` — `format_help(settings)`:
-  платформы генерируются из allowlist, лимиты из настроек (док не разъезжается
-  с поведением); `format_retry_after` (минуты округляются вверх).
-- `src/presentation/telegram/handlers/download_flow.py`:
-  - текстовые хендлеры кнопок reply-клавиатуры (зарегистрированы ДО
-    FSM-хендлера — «ℹ️ Помощь» в состоянии waiting_for_url показывает помощь,
-    а не «Некорректная ссылка»);
-  - preview-лимит в `_show_preview` (обе точки входа одной проверкой);
-    валидация URL идёт ДО лимита — опечатка не сжигает слот;
-  - download-лимит в ✅-confirm; порядок: токен → лимит → consume — отказ по
-    лимиту не сжигает превью, после кулдауна та же кнопка работает;
-  - старые inline-хендлеры `flow:*` сохранены (кнопки под старыми /start
-    работают), захардкоженный `_HELP_TEXT` удалён.
-- `src/presentation/telegram/handlers/download.py` — тот же download-лимит в
-  `/download`, общий namespace ключа `download:<id>` с confirm-кнопкой (две
-  точки входа не складываются в двойной лимит).
-- `src/presentation/telegram/handlers/basic.py` — `/help`; текст `/start`
-  обновлён под постоянную клавиатуру.
-- `src/main.py` — DI `rate_limiter`, `bot.set_my_commands(...)` (синяя
-  menu-кнопка: start/download/preview/help).
-- `tests/unit/test_download_flow.py` — тест меню обновлён под reply-клавиатуру.
-- `infra/alembic/env.py` — попутный фикс сортировки импортов (ruff I001,
-  был в baseline).
+Гейт: pytest 33 passed, ruff clean, mypy strict clean.
 
-## Известный компромисс
+## Как проверить у себя
+1. `unzip -o`, `docker compose up --build`.
+2. В боте: `/language` → жми 🇬🇧 English → подтверждение должно прийти
+   на английском, нижние кнопки станут ⬇️ Download / ℹ️ Help.
+3. Пришли ссылку / нажми /help — всё на английском. `/language` → 🇷🇺 —
+   обратно на русский.
+4. В логах `start_command` теперь видно `telegram_language_code=...` и
+   `resolved_locale=...` — подтверждение диагноза из реального трафика.
 
-`RedisRateLimiter.acquire` — check и record двумя командами (не Lua): два
-строго одновременных запроса одного юзера на границе лимита могут дать +1
-событие. Для per-user Telegram-трафика недостижимо; если понадобится для REST
-API (Phase 5) — маленький EVAL за тем же портом, вызывающий код не меняется.
-
-## Квалити-гейт
-
-pytest: **116 passed** (было 105, +11) · ruff: чисто · mypy strict (src): чисто.
-
-## Ручной smoke-чеклист
-
-1. `/start` — снизу постоянная клавиатура, в поле ввода placeholder.
-2. «ℹ️ Помощь» и `/help` — одинаковый текст с платформами и лимитами.
-3. 6 превью подряд за минуту — шестое отбивается «Попробуй через N сек».
-4. 11-е скачивание за час — alert «Лимит исчерпан…», превью НЕ сгорает:
-   после ожидания ✅ на той же карточке работает.
-5. Синяя menu-кнопка слева от поля ввода — 4 команды.
-docker compose up --build
+## В HANDOFF (заметки)
+- **Telegram `language_code` — только ХИНТ**, не управляемый клиентом
+  надёжно. Реальное переключение — только через явную команду. Не
+  полагаться на смену языка приложения при тестировании i18n.
+- Правило из 9.1 подтверждено ещё раз: локаль подтверждения после
+  смены передаём в `get` ЯВНО (контекст апдейта держит старую).
