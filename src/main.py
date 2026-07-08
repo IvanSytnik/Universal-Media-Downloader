@@ -1,9 +1,4 @@
-"""Application entrypoint — Day 3: Telegram bot + DB + task queue pool.
-
-The worker process has its own entrypoint (run via the `arq` CLI against
-src/infrastructure/queue/worker_settings.py:WorkerSettings), not this file.
-Bot and worker are separate processes on purpose — see PROJECT_SPEC §11.
-"""
+"""Application entrypoint — bot + DB + task queue + i18n (Day 9)."""
 
 from __future__ import annotations
 
@@ -20,15 +15,33 @@ from src.infrastructure.preview_context.redis_preview_context_store import (
     RedisPreviewContextStore,
 )
 from src.infrastructure.rate_limit.redis_rate_limiter import RedisRateLimiter
-from src.presentation.telegram.bot import create_bot, create_dispatcher
+from src.presentation.telegram.bot import (
+    collect_button_translations,
+    create_bot,
+    create_dispatcher,
+)
+from src.presentation.telegram.i18n import (
+    DEFAULT_LOCALE,
+    SUPPORTED_LOCALES,
+    create_i18n_core,
+    create_i18n_middleware,
+)
 from src.shared.logging import configure_logging, get_logger
+
+# Menu-command FTL keys, localized per locale via set_my_commands scopes.
+_MENU_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("start", "cmd-start"),
+    ("download", "cmd-download"),
+    ("preview", "cmd-preview"),
+    ("language", "cmd-language"),
+    ("help", "cmd-help"),
+)
 
 
 async def main() -> None:
     settings: Settings = get_settings()
     configure_logging(log_level=settings.log_level, environment=settings.environment)
     logger = get_logger(__name__)
-
     logger.info("starting_bot", environment=settings.environment)
 
     engine = create_engine(settings)
@@ -42,9 +55,6 @@ async def main() -> None:
         )
     )
 
-    # One shared Redis client for both FSM state (aiogram RedisStorage —
-    # survives restarts, ready for multiple bot instances) and the
-    # preview-context store (token → URL for inline confirm buttons).
     redis_client: Redis = Redis.from_url(settings.redis_dsn)
     fsm_storage = RedisStorage(redis=redis_client)
     preview_store = RedisPreviewContextStore(
@@ -53,24 +63,41 @@ async def main() -> None:
     )
     rate_limiter = RedisRateLimiter(redis=redis_client)
 
-    bot = create_bot(settings)
-    dp = create_dispatcher(storage=fsm_storage)
+    # i18n: build the core, start it (loads FTL for every locale), then
+    # derive the button-translation sets from the SAME started core so
+    # the routing filters and the rendered keyboards can't disagree.
+    i18n_core = create_i18n_core()
+    await i18n_core.startup()
+    i18n_middleware = create_i18n_middleware(i18n_core, redis=redis_client)
+    button_translations = collect_button_translations(i18n_core)
 
-    # Blue "menu" button next to the input field (Day 8). Idempotent —
-    # safe to call on every startup.
+    bot = create_bot(settings)
+    dp = create_dispatcher(
+        i18n_middleware=i18n_middleware,
+        button_translations=button_translations,
+        storage=fsm_storage,
+    )
+
+    # Localized blue "menu" button. One set_my_commands call per locale
+    # (language_code scope); the default set (no language_code) uses the
+    # configured default locale so users with an unsupported UI language
+    # still get a sensible menu.
+    for locale in SUPPORTED_LOCALES:
+        await bot.set_my_commands(
+            [
+                BotCommand(command=cmd, description=i18n_core.get(key, locale))
+                for cmd, key in _MENU_COMMANDS
+            ],
+            language_code=locale,
+        )
     await bot.set_my_commands(
         [
-            BotCommand(command="start", description="Главное меню"),
-            BotCommand(command="download", description="Скачать по ссылке"),
-            BotCommand(command="preview", description="Информация о видео"),
-            BotCommand(command="help", description="Помощь и лимиты"),
+            BotCommand(command=cmd, description=i18n_core.get(key, DEFAULT_LOCALE))
+            for cmd, key in _MENU_COMMANDS
         ]
     )
 
     try:
-        # `settings=`, `session_factory=`, `arq_pool=`, `preview_store=`
-        # here are what make those parameters available by name in any
-        # handler (see handlers/basic.py, handlers/download_flow.py).
         await dp.start_polling(
             bot,
             settings=settings,

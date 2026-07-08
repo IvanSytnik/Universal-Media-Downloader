@@ -1,28 +1,33 @@
 """Guided download flow (Day 7): buttons → link → preview → confirm.
 
-Two entry points converge on the same preview step:
-1. Tap "⬇️ Скачать" → bot asks for a link → next message is the URL.
-2. Just paste a URL as a plain message (no button, no command) — the
-   power-user shortcut.
+Day 9 — localization touches exactly one thing in the routing logic here,
+and it's worth being explicit about it (it's the only place i18n leaks
+into control flow, per the Day 9 architecture discussion):
 
-Either way the user gets a preview card with ✅/❌ buttons. The URL is
-stashed in PreviewContextStore under a short token (callback_data can't
-hold a URL — 64-byte limit), and ✅ resolves the token back and calls
-the same RequestDownloadUseCase that /download uses. The Application
-layer is untouched by this feature — everything here is Presentation
-plus one small infrastructure adapter, exactly as the Dependency Rule
-wants it.
+The two main-menu buttons are a *reply* keyboard, which Telegram gives no
+callback_data — they can only be routed by their visible TEXT. Once that
+text is localized, "⬇️ Скачать" and "⬇️ Download" are the same logical
+button. A user can also still have an old keyboard (rendered in a
+previous locale) at the bottom of the chat after switching languages. So
+matching a single constant string is wrong; we match against the SET of
+all translations of the button key, across every enabled locale. That
+set is built once at startup (i18n.collect_button_translations) and
+injected into handlers as ``button_translations`` — see bot.py/main.py.
 
-The legacy /preview and /download commands keep working unchanged.
+Everything else is unchanged: URLs are stashed under a short token
+(callback_data can't hold a URL), ✅ resolves the token and calls the same
+RequestDownloadUseCase /download uses, the Application layer is untouched.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from html import escape as html_escape
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from aiogram_i18n import I18nContext
 from arq import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -46,8 +51,8 @@ from src.presentation.telegram.formatting import (
     format_retry_after,
 )
 from src.presentation.telegram.keyboards import (
-    BTN_DOWNLOAD,
-    BTN_HELP,
+    BTN_KEY_DOWNLOAD,
+    BTN_KEY_HELP,
     CB_CANCEL_PREFIX,
     CB_CONFIRM_PREFIX,
     CB_FLOW_DOWNLOAD,
@@ -60,40 +65,47 @@ from src.shared.logging import get_logger
 router = Router(name="download_flow")
 logger = get_logger(__name__)
 
-def _looks_like_url(text: str) -> bool:
-    """Cheap Presentation-level routing check, NOT validation.
 
-    Decides only whether a plain message should enter the download flow
-    at all; real validation (structure + allowlist) happens in
-    `_show_preview` via validate_url_against_allowlist. Kept deliberately
-    dumb so a message like "привет" never triggers a validation error
-    reply — the bot just ignores non-URL chatter.
-    """
+def _looks_like_url(text: str) -> bool:
+    """Cheap Presentation-level routing check, NOT validation."""
     stripped = text.strip()
     return stripped.startswith(("http://", "https://"))
+
+
+def _button_matcher(
+    button_key: str,
+) -> Callable[[Message, dict[str, frozenset[str]]], bool]:
+    """Build an aiogram filter that matches a message whose text is ANY
+    translation of ``button_key`` (decision 3A).
+
+    ``button_translations`` is injected by the dispatcher (workflow data);
+    the filter reads the precomputed set for this key. Falls back to an
+    empty set if it's somehow absent, which simply means "no match" — a
+    safe default that degrades to ignoring the message rather than
+    crashing.
+    """
+
+    def _matches(message: Message, button_translations: dict[str, frozenset[str]]) -> bool:
+        texts = button_translations.get(button_key, frozenset())
+        return message.text is not None and message.text in texts
+
+    return _matches
 
 
 async def _show_preview(
     message: Message,
     url: str,
+    i18n: I18nContext,
     settings: Settings,
     preview_store: PreviewContextStorePort,
     rate_limiter: RateLimiterPort,
 ) -> None:
-    """Shared preview step for both entry points (button flow and
-    direct paste). Validates against the allowlist, checks the preview
-    rate limit, fetches metadata, replies with a preview card +
-    confirm/cancel buttons.
-
-    Rate limit sits here (not in a middleware) so the two entry points
-    are covered by one check — DRY — and ordinary chat messages are
-    never limited. Validation runs BEFORE the limit check so a typo in
-    a URL doesn't burn a preview slot.
-    """
+    """Shared preview step for both entry points. Validation runs BEFORE
+    the rate-limit check so a typo doesn't burn a preview slot."""
     try:
         validated_url = validate_url_against_allowlist(url, settings.allowed_domains_set)
     except UnsupportedURLError as exc:
-        await message.answer(f"Некорректная ссылка: {html_escape(str(exc))}")
+        await message.answer(i18n.get("error-bad-url", reason=html_escape(str(exc))))
         return
 
     if message.from_user is not None:
@@ -104,20 +116,20 @@ async def _show_preview(
         )
         if not verdict.allowed:
             logger.info("preview_rate_limited", telegram_id=message.from_user.id)
-            await message.answer(format_retry_after(verdict.retry_after_seconds))
+            await message.answer(format_retry_after(i18n, verdict.retry_after_seconds))
             return
 
-    status_message = await message.answer("🔍 Получаю информацию о видео…")
+    status_message = await message.answer(i18n.get("preview-fetching"))
 
     use_case = PreviewDownloadUseCase(YtDlpDownloader())
     try:
         preview = await use_case.execute(validated_url)
     except UnsupportedURLError as exc:
-        await status_message.edit_text(f"Некорректная ссылка: {html_escape(str(exc))}")
+        await status_message.edit_text(i18n.get("error-bad-url", reason=html_escape(str(exc))))
         return
     except ExtractionError as exc:
         await status_message.edit_text(
-            f"Не удалось получить информацию: {html_escape(str(exc))}"
+            i18n.get("error-extraction-failed", reason=html_escape(str(exc)))
         )
         return
 
@@ -125,43 +137,45 @@ async def _show_preview(
     logger.info("flow_preview_shown", url=validated_url, token=token)
 
     await status_message.edit_text(
-        format_preview(preview),
-        reply_markup=preview_confirm_keyboard(token),
+        format_preview(i18n, preview),
+        reply_markup=preview_confirm_keyboard(i18n, token),
     )
 
 
-# --- Entry point 1: main-menu buttons -------------------------------------
-# Day 8: the main menu is now a persistent ReplyKeyboardMarkup, so the
-# primary handlers match on button TEXT. The flow:* callback handlers
-# below are kept for inline buttons under /start messages sent before
-# the migration — same behaviour, different trigger.
+# --- Entry point 1: main-menu buttons (text-routed, localized) ------------
 
 
-@router.message(F.text == BTN_DOWNLOAD)
-async def handle_download_reply_button(message: Message, state: FSMContext) -> None:
+@router.message(_button_matcher(BTN_KEY_DOWNLOAD))
+async def handle_download_reply_button(
+    message: Message, i18n: I18nContext, state: FSMContext
+) -> None:
     await state.set_state(DownloadFlow.waiting_for_url)
-    await message.answer("Пришли ссылку на видео — покажу превью перед скачиванием.")
+    await message.answer(i18n.get("flow-send-url"))
 
 
-@router.message(F.text == BTN_HELP)
-async def handle_help_reply_button(message: Message, settings: Settings) -> None:
-    await message.answer(format_help(settings))
+@router.message(_button_matcher(BTN_KEY_HELP))
+async def handle_help_reply_button(
+    message: Message, i18n: I18nContext, settings: Settings
+) -> None:
+    await message.answer(format_help(i18n, settings))
 
 
 @router.callback_query(F.data == CB_FLOW_DOWNLOAD)
-async def handle_download_button(callback: CallbackQuery, state: FSMContext) -> None:
+async def handle_download_button(
+    callback: CallbackQuery, i18n: I18nContext, state: FSMContext
+) -> None:
     await state.set_state(DownloadFlow.waiting_for_url)
     if isinstance(callback.message, Message):
-        await callback.message.answer(
-            "Пришли ссылку на видео — покажу превью перед скачиванием."
-        )
+        await callback.message.answer(i18n.get("flow-send-url"))
     await callback.answer()
 
 
 @router.callback_query(F.data == CB_FLOW_HELP)
-async def handle_help_button(callback: CallbackQuery, settings: Settings) -> None:
+async def handle_help_button(
+    callback: CallbackQuery, i18n: I18nContext, settings: Settings
+) -> None:
     if isinstance(callback.message, Message):
-        await callback.message.answer(format_help(settings))
+        await callback.message.answer(format_help(i18n, settings))
     await callback.answer()
 
 
@@ -169,16 +183,14 @@ async def handle_help_button(callback: CallbackQuery, settings: Settings) -> Non
 async def handle_url_in_state(
     message: Message,
     state: FSMContext,
+    i18n: I18nContext,
     settings: Settings,
     preview_store: PreviewContextStorePort,
     rate_limiter: RateLimiterPort,
 ) -> None:
-    # Clear the state unconditionally BEFORE processing: whatever the
-    # user sent, they are out of "waiting" mode — no trap where every
-    # subsequent message keeps producing "Некорректная ссылка".
     await state.clear()
     await _show_preview(
-        message, (message.text or "").strip(), settings, preview_store, rate_limiter
+        message, (message.text or "").strip(), i18n, settings, preview_store, rate_limiter
     )
 
 
@@ -188,15 +200,13 @@ async def handle_url_in_state(
 @router.message(F.text, lambda m: _looks_like_url(m.text or ""))
 async def handle_plain_url(
     message: Message,
+    i18n: I18nContext,
     settings: Settings,
     preview_store: PreviewContextStorePort,
     rate_limiter: RateLimiterPort,
 ) -> None:
-    # This router is included LAST in the dispatcher (see bot.py), so
-    # commands like "/preview https://..." never reach here — command
-    # handlers win first. Only bare URLs land in this handler.
     await _show_preview(
-        message, (message.text or "").strip(), settings, preview_store, rate_limiter
+        message, (message.text or "").strip(), i18n, settings, preview_store, rate_limiter
     )
 
 
@@ -206,6 +216,7 @@ async def handle_plain_url(
 @router.callback_query(F.data.startswith(CB_CONFIRM_PREFIX))
 async def handle_confirm_download(
     callback: CallbackQuery,
+    i18n: I18nContext,
     session_factory: async_sessionmaker[AsyncSession],
     arq_pool: ArqRedis,
     preview_store: PreviewContextStorePort,
@@ -216,17 +227,9 @@ async def handle_confirm_download(
     url = await preview_store.get(token)
 
     if url is None:
-        # Expired (TTL) or already consumed (double-tap) — tell the
-        # user gently instead of failing silently or re-downloading.
-        await callback.answer(
-            "Превью устарело — пришли ссылку ещё раз.", show_alert=True
-        )
+        await callback.answer(i18n.get("flow-preview-stale"), show_alert=True)
         return
 
-    # Order matters here (Day 8): token existence is checked above,
-    # the rate limit next, and only then is the token consumed. A
-    # rate-limited tap must NOT burn the preview — after the cooldown
-    # the same ✅ button should still work (until the preview TTL).
     verdict = await rate_limiter.acquire(
         key=f"download:{callback.from_user.id}",
         limit=settings.rate_limit_downloads_per_hour,
@@ -235,12 +238,10 @@ async def handle_confirm_download(
     if not verdict.allowed:
         logger.info("download_rate_limited", telegram_id=callback.from_user.id)
         await callback.answer(
-            format_retry_after(verdict.retry_after_seconds), show_alert=True
+            format_retry_after(i18n, verdict.retry_after_seconds), show_alert=True
         )
         return
 
-    # Consume the token: a second tap on ✅ while the first one is
-    # still processing must not enqueue a duplicate download.
     await preview_store.delete(token)
 
     telegram_id = callback.from_user.id
@@ -255,24 +256,16 @@ async def handle_confirm_download(
             request = await use_case.execute(telegram_id, url)
         except UnsupportedURLError as exc:
             await callback.answer(
-                f"Некорректная ссылка: {str(exc)[:150]}", show_alert=True
+                i18n.get("error-bad-url", reason=str(exc)[:150]), show_alert=True
             )
             return
 
-    logger.info(
-        "flow_download_confirmed",
-        request_id=str(request.id),
-        telegram_id=telegram_id,
-        token=token,
-    )
+    logger.info("flow_download_confirmed", request_id=str(request.id), telegram_id=telegram_id)
 
     if isinstance(callback.message, Message):
-        # Remove the buttons so the card can't be tapped again, and
-        # append the status right into the same message.
         current_text = callback.message.text or ""
         await callback.message.edit_text(
-            html_escape(current_text)
-            + "\n\n⏳ Скачивание начато — пришлю файл сюда же, когда будет готово.",
+            html_escape(current_text) + i18n.get("flow-download-started")
         )
     await callback.answer()
 
@@ -280,6 +273,7 @@ async def handle_confirm_download(
 @router.callback_query(F.data.startswith(CB_CANCEL_PREFIX))
 async def handle_cancel_download(
     callback: CallbackQuery,
+    i18n: I18nContext,
     preview_store: PreviewContextStorePort,
 ) -> None:
     token = (callback.data or "")[len(CB_CANCEL_PREFIX):]
@@ -287,5 +281,5 @@ async def handle_cancel_download(
 
     if isinstance(callback.message, Message):
         current_text = callback.message.text or ""
-        await callback.message.edit_text(html_escape(current_text) + "\n\n❌ Отменено.")
+        await callback.message.edit_text(html_escape(current_text) + i18n.get("flow-cancelled"))
     await callback.answer()

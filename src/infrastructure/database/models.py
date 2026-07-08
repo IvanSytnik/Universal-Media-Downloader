@@ -1,10 +1,4 @@
-"""SQLAlchemy ORM models. Infrastructure layer only.
-
-These are separate from domain entities (src/domain/entities/) on purpose:
-ORM models know about columns, indexes, and SQL types; domain entities
-know nothing about persistence. Mapping between them lives in the
-repository implementations, not here and not in the domain.
-"""
+"""SQLAlchemy ORM models. Infrastructure layer only."""
 
 from __future__ import annotations
 
@@ -25,6 +19,10 @@ class UserModel(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     telegram_id: Mapped[int | None] = mapped_column(BigInteger, unique=True, nullable=True)
     is_premium: Mapped[bool] = mapped_column(default=False, server_default="false")
+    # Day 9: explicit locale override. Nullable — NULL means "inherit from
+    # Telegram language_code / default". String(8) comfortably fits BCP-47
+    # tags we might use later ("pt-BR"), while today we only store "ru"/"en".
+    language: Mapped[str | None] = mapped_column(String(8), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     download_requests: Mapped[list[DownloadRequestModel]] = relationship(
