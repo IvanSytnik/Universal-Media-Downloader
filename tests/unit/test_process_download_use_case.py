@@ -1,6 +1,11 @@
 """ProcessDownloadUseCase tests using in-memory fakes — no DB, no yt-dlp,
 no Telegram. Covers the three outcomes: success, download failure,
 delivery failure.
+
+Day 10: the use case now takes an ``error_localizer`` (worker-path
+localization of categorized failures) and ``download_timeout_seconds``.
+Failure-path assertions check that a localized message is sent, not raw
+exception text (bug #6).
 """
 
 from __future__ import annotations
@@ -16,6 +21,10 @@ from src.domain.entities.user import User
 from src.domain.exceptions import ExtractionError, NotifierError
 from src.domain.value_objects.download_options import DownloadOptions
 from src.domain.value_objects.enums import DownloadStatus
+from tests.conftest import FakeErrorLocalizer
+
+_MAX_BYTES = 50 * 1024 * 1024
+_TIMEOUT = 1800
 
 
 class FakeDownloadRequestRepository:
@@ -47,6 +56,9 @@ class FakeUserRepository:
         raise NotImplementedError
 
     async def create(self, user: User) -> User:
+        raise NotImplementedError
+
+    async def set_language(self, user_id: UUID, language: str) -> None:
         raise NotImplementedError
 
 
@@ -96,19 +108,32 @@ def _make_request_and_user() -> tuple[DownloadRequest, User]:
     return request, user
 
 
+def _use_case(request_repo, user_repo, downloader, notifier, localizer) -> ProcessDownloadUseCase:
+    return ProcessDownloadUseCase(
+        download_request_repository=request_repo,
+        user_repository=user_repo,
+        downloader=downloader,
+        storage=FakeStorage(),
+        notifier=notifier,
+        error_localizer=localizer,
+        max_deliverable_file_size_bytes=_MAX_BYTES,
+        download_timeout_seconds=_TIMEOUT,
+    )
+
+
 @pytest.mark.asyncio
-async def test_successful_download_marks_done_and_sends_file() -> None:
+async def test_successful_download_marks_done_and_sends_file(i18n_core) -> None:
     request, user = _make_request_and_user()
     result_path = Path("/tmp/fake/video.mp4")
 
     request_repo = FakeDownloadRequestRepository(request)
-    user_repo = FakeUserRepository(user)
-    downloader = FakeDownloader(result_path=result_path)
     notifier = FakeNotifier()
-
-    use_case = ProcessDownloadUseCase(
-        request_repo, user_repo, downloader, FakeStorage(), notifier,
-        max_deliverable_file_size_bytes=50 * 1024 * 1024,
+    use_case = _use_case(
+        request_repo,
+        FakeUserRepository(user),
+        FakeDownloader(result_path=result_path),
+        notifier,
+        FakeErrorLocalizer(i18n_core),
     )
     await use_case.execute(request.id)
 
@@ -118,17 +143,18 @@ async def test_successful_download_marks_done_and_sends_file() -> None:
 
 
 @pytest.mark.asyncio
-async def test_download_failure_marks_failed_and_notifies_text() -> None:
+async def test_download_failure_marks_failed_and_notifies_text(i18n_core) -> None:
     request, user = _make_request_and_user()
 
     request_repo = FakeDownloadRequestRepository(request)
-    user_repo = FakeUserRepository(user)
-    downloader = FakeDownloader(error=ExtractionError("video unavailable"))
     notifier = FakeNotifier()
-
-    use_case = ProcessDownloadUseCase(
-        request_repo, user_repo, downloader, FakeStorage(), notifier,
-        max_deliverable_file_size_bytes=50 * 1024 * 1024,
+    localizer = FakeErrorLocalizer(i18n_core)
+    use_case = _use_case(
+        request_repo,
+        FakeUserRepository(user),
+        FakeDownloader(error=ExtractionError()),
+        notifier,
+        localizer,
     )
     await use_case.execute(request.id)
 
@@ -137,21 +163,23 @@ async def test_download_failure_marks_failed_and_notifies_text() -> None:
     assert notifier.sent_files == []
     assert len(notifier.sent_texts) == 1
     assert notifier.sent_texts[0][0] == 555
+    # A localized, categorized message — not raw exception text.
+    assert notifier.sent_texts[0][1] == localizer.localize("error-extraction-failed", user.language)
 
 
 @pytest.mark.asyncio
-async def test_delivery_failure_marks_failed_and_notifies_text() -> None:
+async def test_delivery_failure_marks_failed_and_notifies_text(i18n_core) -> None:
     request, user = _make_request_and_user()
     result_path = Path("/tmp/fake/video.mp4")
 
     request_repo = FakeDownloadRequestRepository(request)
-    user_repo = FakeUserRepository(user)
-    downloader = FakeDownloader(result_path=result_path)
     notifier = FakeNotifier(fail_send_file=True)
-
-    use_case = ProcessDownloadUseCase(
-        request_repo, user_repo, downloader, FakeStorage(), notifier,
-        max_deliverable_file_size_bytes=50 * 1024 * 1024,
+    use_case = _use_case(
+        request_repo,
+        FakeUserRepository(user),
+        FakeDownloader(result_path=result_path),
+        notifier,
+        FakeErrorLocalizer(i18n_core),
     )
     await use_case.execute(request.id)
 
@@ -160,19 +188,16 @@ async def test_delivery_failure_marks_failed_and_notifies_text() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unknown_request_id_is_a_noop() -> None:
+async def test_unknown_request_id_is_a_noop(i18n_core) -> None:
     request, user = _make_request_and_user()
     request_repo = FakeDownloadRequestRepository(request)
-    user_repo = FakeUserRepository(user)
     notifier = FakeNotifier()
-
-    use_case = ProcessDownloadUseCase(
+    use_case = _use_case(
         request_repo,
-        user_repo,
+        FakeUserRepository(user),
         FakeDownloader(),
-        FakeStorage(),
         notifier,
-        max_deliverable_file_size_bytes=50 * 1024 * 1024,
+        FakeErrorLocalizer(i18n_core),
     )
 
     from uuid import uuid4

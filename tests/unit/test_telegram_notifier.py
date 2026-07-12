@@ -11,6 +11,18 @@ from src.domain.exceptions import NotifierError
 from src.infrastructure.notifier.telegram_notifier import TelegramNotifier
 
 TEST_MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024
+# Day 8.1: TelegramNotifier requires an explicit upload timeout (the
+# default aiogram 60s request timeout aborts large uploads). Any value
+# works for these tests since the Bot is mocked and nothing is uploaded.
+TEST_UPLOAD_TIMEOUT_SECONDS = 1800
+
+
+def _notifier(bot: AsyncMock, max_bytes: int = TEST_MAX_FILE_SIZE_BYTES) -> TelegramNotifier:
+    return TelegramNotifier(
+        bot,
+        max_file_size_bytes=max_bytes,
+        file_upload_timeout_seconds=TEST_UPLOAD_TIMEOUT_SECONDS,
+    )
 
 
 @pytest.mark.asyncio
@@ -19,7 +31,7 @@ async def test_send_file_rejects_oversized_file(tmp_path) -> None:
     big_file.write_bytes(b"x" * (TEST_MAX_FILE_SIZE_BYTES + 1))
 
     bot = AsyncMock()
-    notifier = TelegramNotifier(bot, max_file_size_bytes=TEST_MAX_FILE_SIZE_BYTES)
+    notifier = _notifier(bot)
 
     with pytest.raises(NotifierError, match="слишком большой"):
         await notifier.send_file(telegram_id=1, file_path=big_file)
@@ -33,7 +45,7 @@ async def test_send_file_calls_bot_for_normal_sized_file(tmp_path) -> None:
     small_file.write_bytes(b"small content")
 
     bot = AsyncMock()
-    notifier = TelegramNotifier(bot, max_file_size_bytes=TEST_MAX_FILE_SIZE_BYTES)
+    notifier = _notifier(bot)
 
     await notifier.send_file(telegram_id=1, file_path=small_file, caption="Tom & Jerry")
 
@@ -57,7 +69,7 @@ async def test_send_file_respects_injected_limit_not_a_hardcoded_one(tmp_path) -
     bot = AsyncMock()
     # A tiny injected limit (1MB) must reject a 2MB file even though
     # it's far under the old hardcoded 50MB constant.
-    notifier = TelegramNotifier(bot, max_file_size_bytes=1 * 1024 * 1024)
+    notifier = _notifier(bot, max_bytes=1 * 1024 * 1024)
 
     with pytest.raises(NotifierError, match="слишком большой"):
         await notifier.send_file(telegram_id=1, file_path=file_path)
@@ -69,7 +81,7 @@ async def test_send_file_wraps_telegram_api_error() -> None:
     small_file_bot.send_document.side_effect = TelegramAPIError(
         method="sendDocument", message="boom"
     )
-    notifier = TelegramNotifier(small_file_bot, max_file_size_bytes=TEST_MAX_FILE_SIZE_BYTES)
+    notifier = _notifier(small_file_bot)
 
     import tempfile
     from pathlib import Path
@@ -84,7 +96,7 @@ async def test_send_file_wraps_telegram_api_error() -> None:
 @pytest.mark.asyncio
 async def test_send_text_escapes_html() -> None:
     bot = AsyncMock()
-    notifier = TelegramNotifier(bot, max_file_size_bytes=TEST_MAX_FILE_SIZE_BYTES)
+    notifier = _notifier(bot)
 
     await notifier.send_text(telegram_id=1, text="<script>alert(1)</script>")
 

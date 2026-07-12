@@ -20,6 +20,16 @@ call and calls `process.terminate()` if it doesn't finish within
 `options.timeout_seconds`. This costs process-startup overhead (tens of
 milliseconds) per download, which is negligible next to typical download
 times (seconds to minutes) — a reasonable trade for a real kill switch.
+
+**Day 10 — error categorization.** Both the preview path and the download
+path used to collapse every yt-dlp failure into a single generic
+``ExtractionError``. They now run the raw yt-dlp message through
+``classify_error`` (see error_classifier.py) and raise the specific
+domain category (private / geo / age / unavailable / unsupported-media /
+generic fallback). The raw message stays in the LOG only — the raised
+exception carries a semantic ``error_key``, never the diagnostic text
+(bug #6). The Presentation layer and the worker path both map that key
+to a localized message.
 """
 
 from __future__ import annotations
@@ -32,10 +42,15 @@ from typing import Any
 
 import yt_dlp
 
-from src.domain.exceptions import ExtractionError
+from src.domain.exceptions import (
+    DownloadTimeoutError,
+    ExtractionError,
+    FileTooLargeError,
+)
 from src.domain.value_objects.download_options import DownloadOptions
 from src.domain.value_objects.enums import MediaType
 from src.domain.value_objects.media_preview import MediaPreview
+from src.infrastructure.downloader.error_classifier import classify_error
 from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -75,6 +90,19 @@ def _guess_media_type(info: dict[str, Any]) -> MediaType:
     return MediaType.UNKNOWN
 
 
+def _raise_classified(message: str, url: str) -> None:
+    """Translate a raw yt-dlp error message into the matching domain
+    exception and raise it. Never returns. The raw ``message`` is assumed
+    to have ALREADY been logged by the caller — it is not put into the
+    raised exception's user-facing text (bug #6); the exception's
+    ``error_key`` is what the caller renders.
+    """
+    exc_type = classify_error(message, url)
+    # A short, key-only construction — no diagnostic text in the message,
+    # since callers surface error_key, not str(exc), to the user.
+    raise exc_type()
+
+
 class _DownloadTimeoutError(Exception):
     """Internal — raised by _run_download_in_process, caught by download()."""
 
@@ -85,10 +113,27 @@ class _DownloadProcessError(Exception):
     user directly (see download()'s exception mapping)."""
 
 
+class _DownloadExtractError(Exception):
+    """Internal — a yt-dlp DownloadError raised INSIDE the child process
+    during the real download. Unlike _DownloadProcessError (our own
+    diagnostics for the "file missing after success" class of bug), this
+    wraps yt-dlp's own message so the parent can classify it into a
+    domain category exactly as the preview path does. The raw text is for
+    logs + classification only, never shown to the user."""
+
+
 class _FileTooLargeError(Exception):
-    """Internal — the video exceeds the configured size limit. Unlike
-    _DownloadProcessError, this message IS safe and meaningful to show
-    the end user directly."""
+    """Internal — the video exceeds the configured size limit. Carries
+    the estimated size and the limit (in MB) so the parent can raise the
+    domain ``FileTooLargeError`` with those as localizable arguments —
+    rather than a pre-baked, hardcoded-language string (the pre-Day-10
+    approach embedded a Russian sentence right here in the child
+    process, which couldn't be localized)."""
+
+    def __init__(self, estimated_mb: int, limit_mb: int) -> None:
+        super().__init__(f"file too large: ~{estimated_mb}MB > {limit_mb}MB")
+        self.estimated_mb = estimated_mb
+        self.limit_mb = limit_mb
 
 
 def _estimate_total_filesize(info: dict[str, Any] | None) -> int | None:
@@ -166,11 +211,9 @@ def _download_worker_entrypoint(
                 preview_info = ydl.extract_info(url, download=False)
                 estimated_size = _estimate_total_filesize(preview_info)
                 if estimated_size is not None and estimated_size > max_filesize_bytes:
-                    size_mb = estimated_size / (1024 * 1024)
-                    limit_mb = max_filesize_bytes // (1024 * 1024)
                     raise _FileTooLargeError(
-                        f"Видео слишком большое для отправки в Telegram "
-                        f"(~{size_mb:.0f} МБ, лимит {limit_mb} МБ)"
+                        estimated_mb=round(estimated_size / (1024 * 1024)),
+                        limit_mb=max_filesize_bytes // (1024 * 1024),
                     )
 
             info = ydl.extract_info(url, download=True)
@@ -196,7 +239,18 @@ def _download_worker_entrypoint(
             )
         result_queue.put(("ok", filename))
     except _FileTooLargeError as exc:
-        result_queue.put(("too_large", str(exc)))
+        # Encode the two integers into the string payload (the queue's
+        # value type is a plain string) as "estimated:limit"; the parent
+        # splits them back out.
+        result_queue.put(("too_large", f"{exc.estimated_mb}:{exc.limit_mb}"))
+    except yt_dlp.utils.DownloadError as exc:
+        # yt-dlp's own failure (private/geo/age/removed/unsupported-media,
+        # or a transient network error). Send the raw text back tagged as
+        # "extract_error" so the PARENT can classify it into a domain
+        # category — classification can't happen here because the domain
+        # exception types shouldn't be pickled across the process
+        # boundary; the message is the reliable carrier (see classifier).
+        result_queue.put(("extract_error", str(exc)))
     except Exception as exc:  # noqa: BLE001 — must report every failure to the parent, never die silently
         result_queue.put(("error", str(exc)))
 
@@ -304,7 +358,10 @@ def _run_download_in_process(
 
     status, payload = result_queue.get()
     if status == "too_large":
-        raise _FileTooLargeError(payload)
+        estimated_str, limit_str = payload.split(":", 1)
+        raise _FileTooLargeError(estimated_mb=int(estimated_str), limit_mb=int(limit_str))
+    if status == "extract_error":
+        raise _DownloadExtractError(payload)
     if status == "error":
         raise _DownloadProcessError(payload)
     return payload
@@ -317,12 +374,15 @@ class YtDlpDownloader:
         try:
             info = await loop.run_in_executor(None, _extract_info_sync, url)
         except yt_dlp.utils.DownloadError as exc:
+            # Log the full diagnostic message, then raise a CATEGORIZED
+            # domain error carrying only a semantic key — never the raw
+            # text (bug #6).
             logger.warning("preview_extraction_failed", url=url, error=str(exc))
-            raise ExtractionError(f"Не удалось получить информацию о видео: {exc}") from exc
+            _raise_classified(str(exc), url)
 
         if info is None:
             logger.warning("preview_extraction_empty_result", url=url)
-            raise ExtractionError("yt-dlp вернул пустой результат для этой ссылки")
+            raise ExtractionError
 
         return MediaPreview(
             source_url=url,
@@ -348,24 +408,28 @@ class YtDlpDownloader:
             )
         except _DownloadTimeoutError as exc:
             logger.warning("download_failed", url=url, error=str(exc), reason="timeout")
-            raise ExtractionError(
-                "Скачивание заняло слишком много времени и было прервано"
-            ) from exc
+            # Timeout has its own dedicated key — it's neither a content
+            # problem nor a generic extraction failure.
+            raise DownloadTimeoutError from exc
         except _FileTooLargeError as exc:
-            # This message is safe to show the user as-is — it was built
-            # specifically for that purpose (see _FileTooLargeError).
             logger.warning("download_failed", url=url, error=str(exc), reason="too_large")
-            raise ExtractionError(str(exc)) from exc
+            # Domain FileTooLargeError carries the numbers as localizable
+            # arguments (error-too-large FTL key), not a pre-baked string.
+            raise FileTooLargeError(
+                estimated_mb=exc.estimated_mb, limit_mb=exc.limit_mb
+            ) from exc
+        except _DownloadExtractError as exc:
+            # A yt-dlp failure during the real download — classify it into
+            # the same domain categories the preview path uses. Raw text
+            # to the log only.
+            logger.warning("download_failed", url=url, error=str(exc), reason="extract_error")
+            _raise_classified(str(exc), url)
         except _DownloadProcessError as exc:
             # `str(exc)` here may be a diagnostic-rich message (container
             # paths, yt-dlp internals, occasionally signed CDN URLs) —
             # that belongs in the log, not in a message sent to the user.
-            # Keep it out of ExtractionError's text, which the caller
-            # forwards straight into a Telegram message.
             logger.warning("download_failed", url=url, error=str(exc), reason="process_error")
-            raise ExtractionError(
-                "Не удалось скачать это видео. Попробуй другую ссылку."
-            ) from exc
+            raise ExtractionError from exc
 
         logger.info("download_succeeded", url=url, path=result_path_str)
         return Path(result_path_str)

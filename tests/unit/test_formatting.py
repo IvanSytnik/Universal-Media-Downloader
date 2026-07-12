@@ -44,6 +44,23 @@ def _settings() -> Settings:
     )
 
 
+def _preview(
+    *,
+    title: str,
+    uploader: str | None,
+    duration_seconds: int | None,
+    media_type: MediaType = MediaType.VIDEO,
+) -> MediaPreview:
+    return MediaPreview(
+        source_url="https://example.com/video",
+        title=title,
+        duration_seconds=duration_seconds,
+        uploader=uploader,
+        thumbnail_url=None,
+        media_type=media_type,
+    )
+
+
 @pytest.mark.asyncio
 async def test_help_is_data_driven(core) -> None:
     i18n = FakeI18n(core, "ru")
@@ -67,11 +84,10 @@ async def test_help_localized(core) -> None:
 @pytest.mark.asyncio
 async def test_preview_escapes_html(core) -> None:
     i18n = FakeI18n(core, "en")
-    preview = MediaPreview(
+    preview = _preview(
         title="<script>alert(1)</script>",
         uploader="a & b",
         duration_seconds=90,
-        media_type=MediaType.VIDEO,
     )
     text = format_preview(i18n, preview)
     assert "<script>" not in text
@@ -82,9 +98,7 @@ async def test_preview_escapes_html(core) -> None:
 
 @pytest.mark.asyncio
 async def test_preview_unknown_uploader_localized(core) -> None:
-    preview = MediaPreview(
-        title="t", uploader=None, duration_seconds=None, media_type=MediaType.VIDEO
-    )
+    preview = _preview(title="t", uploader=None, duration_seconds=None)
     ru = format_preview(FakeI18n(core, "ru"), preview)
     en = format_preview(FakeI18n(core, "en"), preview)
     assert "неизвестно" in ru
@@ -95,8 +109,10 @@ def test_format_duration_no_i18n_needed_for_numeric() -> None:
     # duration is numeric formatting; only the "unknown" branch needs i18n.
     class _Dummy:
         locale = "en"
+
         def get(self, key, /, **kw):  # noqa: ANN001
             return "unknown"
+
     assert format_duration(_Dummy(), 3661) == "1:01:01"
     assert format_duration(_Dummy(), 59) == "0:59"
     assert format_duration(_Dummy(), None) == "unknown"

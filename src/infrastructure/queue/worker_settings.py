@@ -5,6 +5,15 @@ down at shutdown — not per-job, since a DB engine / Bot session / process
 pool are all expensive to create and safe to share across jobs within
 one worker process. Per-job state (the DB *session*, as opposed to the
 engine) is still created fresh in each job — see jobs.py::download_job.
+
+Day 10 adds an ``error_localizer`` to ``ctx``: the worker sends localized
+failure messages, but has no aiogram ``I18nContext`` (separate process,
+no update in flight). It therefore builds the SAME Fluent core the
+Telegram side uses and wraps it in ``FluentErrorLocalizer``, which always
+resolves keys with an EXPLICIT locale (mandatory outside an update
+context — HANDOFF bug #10/#11). ``create_i18n_core().startup()`` is a
+COROUTINE and must be awaited before the core is used — done here at
+worker startup, mirroring main.py.
 """
 
 from __future__ import annotations
@@ -18,10 +27,12 @@ from arq.cron import cron
 from src.config.settings import get_settings
 from src.infrastructure.database.engine import create_engine, create_session_factory
 from src.infrastructure.downloader.ytdlp_downloader import YtDlpDownloader
+from src.infrastructure.localization.fluent_error_localizer import FluentErrorLocalizer
 from src.infrastructure.notifier.telegram_notifier import TelegramNotifier
 from src.infrastructure.queue.jobs import cleanup_expired_downloads_job, download_job, ping_job
 from src.infrastructure.storage.local_storage import LocalFileStorage
 from src.infrastructure.telegram.bot_factory import create_telegram_bot
+from src.presentation.telegram.i18n import DEFAULT_LOCALE, create_i18n_core
 from src.shared.logging import configure_logging, get_logger
 
 settings = get_settings()
@@ -55,13 +66,19 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["max_deliverable_file_size_bytes"] = settings.max_deliverable_file_size_bytes
     ctx["download_timeout_seconds"] = settings.download_timeout_seconds
 
+    # i18n for the worker's failure messages. Build the same Fluent core
+    # the Telegram side uses, start it (loads FTL — a COROUTINE, bug #11),
+    # then wrap it in the explicit-locale localizer (bug #10).
+    i18n_core = create_i18n_core()
+    await i18n_core.startup()
+    ctx["error_localizer"] = FluentErrorLocalizer(i18n_core, default_locale=DEFAULT_LOCALE)
+
     notifier_bot = create_telegram_bot(settings)
     ctx["notifier_bot"] = notifier_bot
     ctx["notifier"] = TelegramNotifier(
-        notifier_bot, 
-        max_file_size_bytes=settings.max_deliverable_file_size_bytes, 
-        file_upload_timeout_seconds=settings.file_upload_timeout_seconds
-
+        notifier_bot,
+        max_file_size_bytes=settings.max_deliverable_file_size_bytes,
+        file_upload_timeout_seconds=settings.file_upload_timeout_seconds,
     )
 
 

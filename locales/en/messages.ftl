@@ -1,4 +1,4 @@
-## Universal Media Downloader — English locale (Day 9)
+## Universal Media Downloader — English locale (Day 9, extended Day 10)
 ## Same keys as ru/messages.ftl. Missing a key here is a hard error
 ## (raise_key_error=True), so both locales stay structurally in sync.
 
@@ -73,9 +73,27 @@ flow-cancelled =
 flow-preview-stale = The preview has expired — send the link again.
 
 # --- URL errors ---
+# error-bad-url: OUR allowlist validation. $reason is our own safe text,
+# not yt-dlp diagnostics. Keeps its parameter (Day 9).
 error-bad-url = Invalid link: { $reason }
-error-extraction-failed = Couldn't fetch info: { $reason }
 error-unsupported-site = This site is not supported
+
+# --- Download / extraction errors (Day 10) ---
+# Categorized messages. NEVER contain raw yt-dlp text (bug #6) — clean
+# localized text keyed by error semantics only.
+# error-extraction-failed — generic fallback, NO parameter (Day 10:
+# was { $reason }; raw reason is no longer shown to the user).
+error-extraction-failed = Couldn't process this link. Try another one.
+error-private = This is a private account or login-only content. I can't download it.
+error-geo = This video is blocked in the region I'm requesting it from. Retrying won't help.
+error-age = This video is age-restricted and needs a signed-in, age-verified session I don't have.
+error-unavailable = This video was removed or no longer exists. Double-check the link.
+error-unsupported-media = This looks like a photo or slideshow. I can only download videos for now.
+error-timeout = The download took too long and was aborted. Please try again.
+# $estimated_mb, $limit_mb — numbers (Fluent formats digit grouping per locale).
+error-too-large = This video is too large for Telegram (~{ $estimated_mb } MB, limit { $limit_mb } MB).
+# Delivery (downloaded but couldn't send) — worker path.
+error-delivery-failed = I downloaded the video but couldn't send it to Telegram. Please try again later.
 
 # --- /download ---
 download-usage = Usage: /download link

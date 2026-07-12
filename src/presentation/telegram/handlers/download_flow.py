@@ -14,6 +14,17 @@ all translations of the button key, across every enabled locale. That
 set is built once at startup (i18n.collect_button_translations) and
 injected into handlers as ``button_translations`` — see bot.py/main.py.
 
+Day 10 — two DISTINCT origins of ``UnsupportedURLError`` are kept apart:
+1. Our own allowlist validator (validate_url_against_allowlist) raises it
+   BEFORE yt-dlp runs, with a safe, meaningful ``reason`` — shown via the
+   ``error-bad-url`` key (reason preserved: it's our text, not yt-dlp's).
+2. The downloader/classifier raises categorized errors (including
+   ``UnsupportedURLError`` for a genuinely unsupported site) — shown via
+   ``format_download_error``, which reads ``error_key`` and never leaks
+   raw text (bug #6).
+Mixing these up would either lose our helpful validation reason or leak
+yt-dlp diagnostics — so the two catch sites stay separate.
+
 Everything else is unchanged: URLs are stashed under a short token
 (callback_data can't hold a URL), ✅ resolves the token and calls the same
 RequestDownloadUseCase /download uses, the Application layer is untouched.
@@ -46,6 +57,7 @@ from src.infrastructure.database.repositories.user_repository import SqlAlchemyU
 from src.infrastructure.downloader.ytdlp_downloader import YtDlpDownloader
 from src.infrastructure.queue.arq_task_queue import ArqTaskQueue
 from src.presentation.telegram.formatting import (
+    format_download_error,
     format_help,
     format_preview,
     format_retry_after,
@@ -105,6 +117,7 @@ async def _show_preview(
     try:
         validated_url = validate_url_against_allowlist(url, settings.allowed_domains_set)
     except UnsupportedURLError as exc:
+        # Origin 1: OUR validator. `reason` is our own safe text — keep it.
         await message.answer(i18n.get("error-bad-url", reason=html_escape(str(exc))))
         return
 
@@ -124,13 +137,10 @@ async def _show_preview(
     use_case = PreviewDownloadUseCase(YtDlpDownloader())
     try:
         preview = await use_case.execute(validated_url)
-    except UnsupportedURLError as exc:
-        await status_message.edit_text(i18n.get("error-bad-url", reason=html_escape(str(exc))))
-        return
-    except ExtractionError as exc:
-        await status_message.edit_text(
-            i18n.get("error-extraction-failed", reason=html_escape(str(exc)))
-        )
+    except (ExtractionError, UnsupportedURLError) as exc:
+        # Origin 2: the downloader/classifier. Categorized; render via
+        # error_key, never raw text.
+        await status_message.edit_text(format_download_error(i18n, exc))
         return
 
     token = await preview_store.save(validated_url)
@@ -255,6 +265,7 @@ async def handle_confirm_download(
         try:
             request = await use_case.execute(telegram_id, url)
         except UnsupportedURLError as exc:
+            # Our validator again (RequestDownloadUseCase re-validates).
             await callback.answer(
                 i18n.get("error-bad-url", reason=str(exc)[:150]), show_alert=True
             )
