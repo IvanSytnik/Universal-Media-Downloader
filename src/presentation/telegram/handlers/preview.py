@@ -1,8 +1,9 @@
-"""/preview <url> — fetch and show media metadata. Day 9: localized."""
+"""/preview <url> — fetch and show media metadata. Day 9: localized.
+Day 10: categorized error messages (private/geo/age/unavailable/
+unsupported-media/timeout/too-large) instead of one generic string.
+"""
 
 from __future__ import annotations
-
-from html import escape as html_escape
 
 from aiogram import Router
 from aiogram.types import Message
@@ -11,7 +12,7 @@ from aiogram_i18n import I18nContext
 from src.application.use_cases.preview_download import PreviewDownloadUseCase
 from src.domain.exceptions import ExtractionError, UnsupportedURLError
 from src.infrastructure.downloader.ytdlp_downloader import YtDlpDownloader
-from src.presentation.telegram.formatting import format_preview
+from src.presentation.telegram.formatting import format_download_error, format_preview
 from src.shared.logging import get_logger
 
 router = Router(name="preview")
@@ -32,11 +33,12 @@ async def handle_preview(message: Message, i18n: I18nContext) -> None:
 
     try:
         preview = await use_case.execute(url)
-    except UnsupportedURLError as exc:
-        await message.answer(i18n.get("error-bad-url", reason=html_escape(str(exc))))
-        return
-    except ExtractionError as exc:
-        await message.answer(i18n.get("error-extraction-failed", reason=html_escape(str(exc))))
+    except (ExtractionError, UnsupportedURLError) as exc:
+        # Both carry an ``error_key``; format_download_error maps it to a
+        # localized message. Catching the two base types covers every
+        # categorized subclass (they subclass ExtractionError) plus the
+        # "site not supported" case.
+        await message.answer(format_download_error(i18n, exc))
         return
 
     logger.info("preview_shown", url=url, title=preview.title)

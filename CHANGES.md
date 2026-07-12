@@ -1,76 +1,104 @@
-# Day 9.2 — команда /language + диагностика локали
+# Day 10 — Категоризация ошибок yt-dlp + локализованные сообщения
 
-## Зачем (по итогам live-теста 9.1)
-Ты переключал язык клиента, но всё приходило на русском. Диагноз (в
-изоляции воспроизведён): код выбора локали работает верно — Telegram
-кладёт в апдейт `from_user.language_code="ru"` НЕЗАВИСИМО от языка UI
-приложения, и его нельзя надёжно поменять со стороны клиента. Значит
-автоопределение (language_code → default) может «залипить» юзера на
-языке, который он не может сменить. Единственный надёжный механизм —
-явная команда переключения. Инфраструктура под неё была заложена ещё в
-Day 9 (`manager.set_locale` + Redis-путь + `UserRepository.set_language`),
-поэтому это замыкание этапа, а не новый скоуп.
+Инкрементальный патч. Распаковать `unzip -o` поверх корня проекта.
 
-## Что добавлено
+## Что сделано
 
-### /language — переключатель языка
-- `src/presentation/telegram/handlers/language.py` (новый):
-  - `/language` → сообщение с inline-кнопками 🇷🇺/🇬🇧. Текст-приглашение
-    двуязычное (понятно на любой текущей локали).
-  - callback `lang:<locale>` (payload — голый код локали,
-    язык-независим, как остальные callback_data):
-    1. **Redis** через `i18n.set_locale(chosen)` — hot-path кэш, который
-       читает менеджер на КАЖДОМ апдейте → смена вступает в силу со
-       СЛЕДУЮЩЕГО апдейта.
-    2. **Postgres** через `set_language(telegram_id, chosen)` — durable,
-       переживает вытеснение из Redis.
-    3. Подтверждение НА НОВОМ языке (локаль передаётся в `get` явно —
-       контекст этого апдейта ещё держит старую локаль) + перерисовка
-       нижней клавиатуры на новом языке.
-  - Пишем ОБА хранилища: только Redis → выбор молча откатится на
-    eviction; только Postgres → менеджер (читает Redis, не БД в горячем
-    пути) не увидит до ре-варма. Оба = консистентность.
-- `keyboards.py`: `+ language_picker_keyboard(i18n)`, `+ CB_LANG_PREFIX`.
-  `main_menu_keyboard(i18n, locale=None)` — опциональная явная локаль
-  (нужна сразу после смены, когда контекст ещё на старой локали).
-- `bot.py`: `language_router` подключён (после basic, до download_flow).
-- `main.py`: `/language` добавлена в локализованное меню команд.
-- FTL (ru+en): `language-prompt`, `btn-lang-ru`, `btn-lang-en`,
-  `language-changed`, `cmd-language`.
+Раньше любой сбой извлечения/скачивания превращался в одно общее
+сообщение («не удалось получить информацию»). Теперь ошибки yt-dlp
+классифицируются в доменные категории, и пользователь получает чистое
+**локализованное** сообщение по семантике сбоя. Реальный повод — TikTok
+photo/slideshow пост (`/photo/...`), который yt-dlp отдаёт как
+`Unsupported URL`; теперь это честное «фото/слайдшоу, пока не умею», а не
+«сайт не поддерживается» и не «попробуй другую ссылку».
 
-### Диагностика локали
-- `handlers/basic.py`: в лог `start_command` добавлены
-  `telegram_language_code` (что реально прислал Telegram) и
-  `resolved_locale` (что срезолвилось). Разовая проверка гипотезы из
-  реального трафика — увидишь `telegram_language_code=ru` в логе.
-  Оставлено как штатная диагностика.
+### Категории (все — подклассы `ExtractionError`, обратная совместимость)
 
-## Live-проверка (не «на глаз», прогнано в песочнице)
-Сквозной сценарий через реальный I18nMiddleware + хендлер:
-`/start` при language_code=ru → показывает **ru** → выбор 🇬🇧 English →
-Redis получает `umd:locale:42=en` → следующий `/start` резолвится в
-**en**. Подтверждено программно (assert before==ru, after==en).
+| Класс | error_key | Когда |
+|---|---|---|
+| `PrivateContentError` | `error-private` | приватный аккаунт / login-wall |
+| `GeoRestrictedError` | `error-geo` | геоблок |
+| `AgeRestrictedError` | `error-age` | возрастное ограничение |
+| `ContentUnavailableError` | `error-unavailable` | удалено / не существует |
+| `UnsupportedMediaError` | `error-unsupported-media` | сайт поддержан, медиа — нет (фото/слайдшоу) |
+| `DownloadTimeoutError` | `error-timeout` | скачивание прервано по таймауту |
+| `FileTooLargeError` | `error-too-large` | превышен лимит размера (несёт числа) |
+| `ExtractionError` (fallback) | `error-extraction-failed` | неопознанное |
+| `UnsupportedURLError` | `error-unsupported-site` | реально неподдерживаемый сайт / битая ссылка |
 
-## Тесты (+5, итого 33 в песочном срезе)
-- `test_language_switch.py`: override вступает в силу на следующем
-  get_locale; per-user изоляция; переключение туда-обратно.
-- `test_language_keyboard.py`: picker содержит обе локали с голыми
-  кодами; меню рендерится в явной локали / в контекстной без override.
+`error_key` — **семантический идентификатор**, не текст: домен не знает
+языков. Presentation и worker резолвят его в строку.
 
-Гейт: pytest 33 passed, ruff clean, mypy strict clean.
+## Новые файлы
 
-## Как проверить у себя
-1. `unzip -o`, `docker compose up --build`.
-2. В боте: `/language` → жми 🇬🇧 English → подтверждение должно прийти
-   на английском, нижние кнопки станут ⬇️ Download / ℹ️ Help.
-3. Пришли ссылку / нажми /help — всё на английском. `/language` → 🇷🇺 —
-   обратно на русский.
-4. В логах `start_command` теперь видно `telegram_language_code=...` и
-   `resolved_locale=...` — подтверждение диагноза из реального трафика.
+- `src/infrastructure/downloader/error_classifier.py` — `classify_error(message, url)`:
+  yt-dlp сообщение → доменный тип. Матчинг по устойчивым сигнатурам,
+  порядок = приоритет. `Unsupported URL` + `/photo/`|`slideshow` →
+  `UnsupportedMediaError`; голое → `UnsupportedURLError`. Неопознанное →
+  `ExtractionError`. **Сигнатуры проверены на корпусе реальных строк
+  yt-dlp** (см. `tests/unit/test_error_classifier.py`).
+- `src/domain/interfaces/error_localizer.py` — `ErrorLocalizerPort`
+  (`localize(error_key, locale, **kwargs)`). Домен-порт для worker-пути.
+- `src/infrastructure/localization/fluent_error_localizer.py` —
+  `FluentErrorLocalizer` над тем же Fluent-ядром, что и Telegram-слой, но
+  **всегда с явной локалью** (баг #10). Для worker-процесса, где нет
+  `I18nContext`.
+- `tests/unit/test_error_classifier.py`, `test_error_localizer.py`,
+  `test_process_download_errors.py` — 38 тестов.
 
-## В HANDOFF (заметки)
-- **Telegram `language_code` — только ХИНТ**, не управляемый клиентом
-  надёжно. Реальное переключение — только через явную команду. Не
-  полагаться на смену языка приложения при тестировании i18n.
-- Правило из 9.1 подтверждено ещё раз: локаль подтверждения после
-  смены передаём в `get` ЯВНО (контекст апдейта держит старую).
+## Изменённые файлы
+
+- `src/domain/exceptions.py` — добавлены 7 категорий + `error_key` на
+  всех. `FileTooLargeError(estimated_mb, limit_mb)` несёт числа.
+- `src/infrastructure/downloader/ytdlp_downloader.py` — классификация в
+  **обоих** путях: `get_preview` (ловит `DownloadError`) и `download`
+  (child-процесс ловит `DownloadError` → тег `extract_error` → родитель
+  классифицирует). Сырой текст yt-dlp — **только в лог** (баг #6);
+  наружу летит категоризированное исключение с `error_key`. Таймаут и
+  too-large получили собственные ключи. Русская строка про размер убрана
+  из child-процесса — теперь `FileTooLargeError` с числами (локализуемо).
+- `src/application/use_cases/process_download.py` — инжектится
+  `error_localizer: ErrorLocalizerPort`. При сбое: `exc.error_key` +
+  `user.language` → локализованная строка. **Убраны два бага:** хардкод
+  `f"Не удалось скачать: {exc}"` (нелокализованная строка в Application +
+  утечка `{exc}` юзеру). Доставка тоже локализована (`error-delivery-failed`).
+- `src/presentation/telegram/formatting.py` — новый `format_download_error(i18n, exc)`:
+  единая точка `error_key → i18n.get`, `FileTooLargeError` с аргументами.
+- `src/presentation/telegram/handlers/preview.py`,
+  `handlers/download_flow.py` — используют `format_download_error`.
+  **Важно:** `error-bad-url` (наша валидация allowlist, `reason`
+  безопасен) и категоризированные ошибки загрузчика — **разные точки
+  catch**, чтобы не потерять наш reason и не слить диагностику yt-dlp.
+- `src/infrastructure/queue/worker_settings.py` — строит i18n-ядро
+  (`await core.startup()`, баг #11) + `FluentErrorLocalizer` в `ctx`.
+- `src/infrastructure/queue/jobs.py` — прокидывает `error_localizer` в
+  use case.
+- `locales/{ru,en}/messages.ftl` — 8 новых ключей (см. таблицу +
+  `error-delivery-failed`). **`error-extraction-failed` потерял `{ $reason }`**
+  (Day 10: сырой reason юзеру больше не показывается). Локали структурно
+  синхронны (47 ключей, проверено).
+
+## Проверено
+
+- `pytest` — 38 новых тестов зелёные (классификатор на реальном корпусе,
+  локализатор, worker-путь; проверка «сырой текст не утекает»).
+- `ruff check` — чисто.
+- `mypy --strict` — чисто.
+- **Live-прогон worker-пути** (эмуляция startup + `ProcessDownloadUseCase`
+  с реальным `FluentErrorLocalizer`): локализация по `user.language`,
+  `None → en`, числовые аргументы, без краша (урок 9.1 — рантайм-
+  инициализацию проверять прогоном, не только юнит-тестами).
+
+## ⚠️ Одно поведенческое изменение для проверки в бою
+
+`error-extraction-failed` больше **не принимает** `{ $reason }`. Если
+где-то в коде остался вызов `i18n.get("error-extraction-failed", reason=...)`
+— лишний аргумент безопасно игнорируется Fluent, но текст reason больше
+не покажется (это и была цель — не течь диагностикой). Проверь, что таких
+вызовов не осталось (в патче их нет).
+
+## Не сделано (по плану — отдельный день)
+
+Фото/карусели как **скачиваемый** контент (расширение `MediaType.PHOTO`
+и логики отправки нескольких файлов). Сейчас фото-пост честно
+распознаётся и отклоняется с `error-unsupported-media`.

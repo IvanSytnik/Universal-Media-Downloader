@@ -4,7 +4,8 @@
 thing: loads a DownloadRequest by id and drives it through
 ProcessDownloadUseCase using dependencies stashed in `ctx` at worker
 startup (see worker_settings.py) — a fresh DB session per job, but a
-shared downloader/storage/notifier across the worker's lifetime.
+shared downloader/storage/notifier/error_localizer across the worker's
+lifetime.
 """
 
 from __future__ import annotations
@@ -48,10 +49,12 @@ async def download_job(ctx: dict[str, Any], request_id: str) -> None:
             downloader=ctx["downloader"],
             storage=ctx["storage"],
             notifier=ctx["notifier"],
+            error_localizer=ctx["error_localizer"],
             max_deliverable_file_size_bytes=ctx["max_deliverable_file_size_bytes"],
             download_timeout_seconds=ctx["download_timeout_seconds"],
         )
         await use_case.execute(UUID(request_id))
+
 
 async def cleanup_expired_downloads_job(ctx: dict[str, Any]) -> None:
     """Runs on a cron schedule (see worker_settings.py) — not triggered

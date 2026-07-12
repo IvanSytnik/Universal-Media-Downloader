@@ -3,6 +3,12 @@ tests never touch the network or a real yt-dlp extraction — they check
 the adapter's own logic: mapping yt-dlp's info dict to MediaPreview,
 media-type guessing, and exception translation (yt_dlp exceptions must
 never leak past this module — see module docstring in ytdlp_downloader.py).
+
+Day 10: exception translation now produces CATEGORIZED domain errors
+carrying a semantic ``error_key`` instead of a user-facing text string.
+The raw yt-dlp/diagnostic text goes to the LOG only (bug #6), so the
+raised exception's ``str()`` is intentionally empty — tests assert on the
+exception TYPE and ``error_key``, not on message text.
 """
 
 from __future__ import annotations
@@ -13,7 +19,11 @@ from typing import Any
 import pytest
 import yt_dlp
 
-from src.domain.exceptions import ExtractionError
+from src.domain.exceptions import (
+    DownloadTimeoutError,
+    ExtractionError,
+    FileTooLargeError,
+)
 from src.domain.value_objects.download_options import DownloadOptions
 from src.domain.value_objects.enums import MediaType
 from src.infrastructure.downloader import ytdlp_downloader
@@ -30,9 +40,7 @@ async def test_get_preview_maps_info_dict_to_media_preview(monkeypatch: pytest.M
         "vcodec": "h264",
         "acodec": "aac",
     }
-    monkeypatch.setattr(
-        ytdlp_downloader, "_extract_info_sync", lambda url: fake_info
-    )
+    monkeypatch.setattr(ytdlp_downloader, "_extract_info_sync", lambda url: fake_info)
 
     downloader = YtDlpDownloader()
     preview = await downloader.get_preview("https://example.com/video")
@@ -76,8 +84,13 @@ async def test_get_preview_wraps_ytdlp_download_error(monkeypatch: pytest.Monkey
     monkeypatch.setattr(ytdlp_downloader, "_extract_info_sync", _raise)
 
     downloader = YtDlpDownloader()
-    with pytest.raises(ExtractionError):
+    # "Video unavailable" classifies to ContentUnavailableError, an
+    # ExtractionError subclass — still caught as ExtractionError.
+    with pytest.raises(ExtractionError) as exc_info:
         await downloader.get_preview("https://example.com/private-video")
+    # Categorized, and no raw yt-dlp text leaked to the user-facing str.
+    assert exc_info.value.error_key == "error-unavailable"
+    assert "Video unavailable" not in str(exc_info.value)
 
 
 def test_guess_media_type_video() -> None:
@@ -112,7 +125,7 @@ async def test_download_returns_path_on_success(monkeypatch: pytest.MonkeyPatch,
 
 
 @pytest.mark.asyncio
-async def test_download_maps_timeout_to_extraction_error(
+async def test_download_maps_timeout_to_timeout_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     def _raise_timeout(
@@ -125,10 +138,12 @@ async def test_download_maps_timeout_to_extraction_error(
     downloader = YtDlpDownloader()
     options = DownloadOptions(output_dir=tmp_path, timeout_seconds=1)
 
-    # User-facing message is intentionally short and generic — the
-    # diagnostic-rich internal message goes to the log, not to the user.
-    with pytest.raises(ExtractionError, match="слишком много времени"):
+    # Day 10: timeout gets its own category + key. The user-facing text is
+    # rendered from that key downstream (worker/presentation), NOT carried
+    # in the exception — so str(exc) is empty here by design.
+    with pytest.raises(DownloadTimeoutError) as exc_info:
         await downloader.download("https://example.com/video", options)
+    assert exc_info.value.error_key == "error-timeout"
 
 
 @pytest.mark.asyncio
@@ -139,8 +154,8 @@ async def test_download_maps_process_error_to_extraction_error(
         url: str, output_dir: str, max_filesize_bytes: int | None, timeout_seconds: int
     ) -> str:
         # This diagnostic-rich message must NOT leak into the raised
-        # ExtractionError's text (it may contain container paths, signed
-        # CDN URLs, etc.) — only a short, safe message should surface.
+        # exception's text (it may contain container paths, signed CDN
+        # URLs, etc.) — it belongs in the log only.
         raise ytdlp_downloader._DownloadProcessError(
             "dir_contents=[...] info_summary={'url': 'https://signed.example/secret'}"
         )
@@ -153,25 +168,31 @@ async def test_download_maps_process_error_to_extraction_error(
     with pytest.raises(ExtractionError) as exc_info:
         await downloader.download("https://example.com/video", options)
 
+    # A generic process error falls back to the generic extraction key,
+    # and crucially leaks no diagnostic text.
+    assert exc_info.value.error_key == "error-extraction-failed"
     assert "signed.example" not in str(exc_info.value)
-    assert "Не удалось скачать" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
-async def test_download_maps_file_too_large_with_clean_user_message(
+async def test_download_maps_file_too_large_to_categorized_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     def _raise_too_large(
         url: str, output_dir: str, max_filesize_bytes: int | None, timeout_seconds: int
     ) -> str:
-        raise ytdlp_downloader._FileTooLargeError(
-            "Видео слишком большое для отправки в Telegram (~178 МБ, лимит 50 МБ)"
-        )
+        # Day 10: the internal error carries the numbers, not a pre-baked
+        # (hardcoded-language) sentence.
+        raise ytdlp_downloader._FileTooLargeError(estimated_mb=178, limit_mb=50)
 
     monkeypatch.setattr(ytdlp_downloader, "_run_download_in_process", _raise_too_large)
 
     downloader = YtDlpDownloader()
     options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60)
 
-    with pytest.raises(ExtractionError, match="слишком большое"):
+    with pytest.raises(FileTooLargeError) as exc_info:
         await downloader.download("https://example.com/video", options)
+    # The numbers survive as structured data for localized rendering.
+    assert exc_info.value.error_key == "error-too-large"
+    assert exc_info.value.estimated_mb == 178
+    assert exc_info.value.limit_mb == 50
