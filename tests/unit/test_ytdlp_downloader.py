@@ -9,6 +9,11 @@ carrying a semantic ``error_key`` instead of a user-facing text string.
 The raw yt-dlp/diagnostic text goes to the LOG only (bug #6), so the
 raised exception's ``str()`` is intentionally empty — tests assert on the
 exception TYPE and ``error_key``, not on message text.
+
+Day 11A: ``_run_download_in_process`` gained a fifth positional argument
+(``format_kind_value``) so the download can be video or audio. The four
+monkeypatched stand-ins below accept it and ignore it — they exercise
+``download()``'s exception mapping, which is independent of the format.
 """
 
 from __future__ import annotations
@@ -114,7 +119,7 @@ async def test_download_returns_path_on_success(monkeypatch: pytest.MonkeyPatch,
     monkeypatch.setattr(
         ytdlp_downloader,
         "_run_download_in_process",
-        lambda url, output_dir, max_filesize_bytes, timeout_seconds: expected_path,
+        lambda url, output_dir, max_filesize_bytes, timeout_seconds, format_kind_value: expected_path,
     )
 
     downloader = YtDlpDownloader()
@@ -129,7 +134,11 @@ async def test_download_maps_timeout_to_timeout_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     def _raise_timeout(
-        url: str, output_dir: str, max_filesize_bytes: int | None, timeout_seconds: int
+        url: str,
+        output_dir: str,
+        max_filesize_bytes: int | None,
+        timeout_seconds: int,
+        format_kind_value: str,
     ) -> str:
         raise ytdlp_downloader._DownloadTimeoutError("превысило лимит 1 секунд")
 
@@ -151,7 +160,11 @@ async def test_download_maps_process_error_to_extraction_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     def _raise_process_error(
-        url: str, output_dir: str, max_filesize_bytes: int | None, timeout_seconds: int
+        url: str,
+        output_dir: str,
+        max_filesize_bytes: int | None,
+        timeout_seconds: int,
+        format_kind_value: str,
     ) -> str:
         # This diagnostic-rich message must NOT leak into the raised
         # exception's text (it may contain container paths, signed CDN
@@ -179,7 +192,11 @@ async def test_download_maps_file_too_large_to_categorized_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     def _raise_too_large(
-        url: str, output_dir: str, max_filesize_bytes: int | None, timeout_seconds: int
+        url: str,
+        output_dir: str,
+        max_filesize_bytes: int | None,
+        timeout_seconds: int,
+        format_kind_value: str,
     ) -> str:
         # Day 10: the internal error carries the numbers, not a pre-baked
         # (hardcoded-language) sentence.

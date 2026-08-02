@@ -1,7 +1,10 @@
 """SQLAlchemy implementation of DownloadRequestRepository (domain interface).
 
-Not wired into any use case yet (that's Day 5) — exists now because the
-table exists now. Covered by tests so it doesn't sit as untested dead code.
+Day 11A: ``format_kind`` is mapped on read (_to_entity) and on create.
+It is deliberately NOT touched in ``update``: the requested format is
+fixed the moment the request is created and never changes over the
+request's lifecycle (only status/completed_at do), so writing it back on
+every state transition would be pointless churn.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.domain.entities.download_request import DownloadRequest
 from src.domain.value_objects.enums import DownloadStatus, MediaType
+from src.domain.value_objects.format_kind import FormatKind
 from src.infrastructure.database.models import DownloadRequestModel
 
 
@@ -23,6 +27,7 @@ def _to_entity(model: DownloadRequestModel) -> DownloadRequest:
         source_url=model.source_url,
         media_type=MediaType(model.media_type),
         status=DownloadStatus(model.status),
+        format_kind=FormatKind(model.format_kind),
         created_at=model.created_at,
         completed_at=model.completed_at,
     )
@@ -43,6 +48,7 @@ class SqlAlchemyDownloadRequestRepository:
             source_url=download_request.source_url,
             media_type=download_request.media_type.value,
             status=download_request.status.value,
+            format_kind=download_request.format_kind.value,
         )
         self._session.add(model)
         await self._session.flush()

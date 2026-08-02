@@ -1,10 +1,13 @@
-## Universal Media Downloader — русская локаль (Day 9, дополнено Day 10)
+## Universal Media Downloader — русская локаль (Day 9, дополнено Day 10, Day 11A)
 ## Все строки Presentation-слоя. Ключи сгруппированы по хендлерам.
 
 # --- Кнопки (их ТЕКСТ участвует в роутинге — см. i18n.collect_button_translations) ---
 btn-download = ⬇️ Скачать
 btn-help = ℹ️ Помощь
 btn-confirm = ✅ Скачать
+# Day 11A: две кнопки подтверждения под превью (видео / mp3).
+btn-confirm-video = ⬇️ Видео
+btn-confirm-audio = 🎵 MP3
 btn-cancel = ❌ Отмена
 
 # --- Меню-команды (set_my_commands) ---
@@ -35,7 +38,7 @@ help-text =
     Как пользоваться:
     1. Нажми «{ btn-download }» внизу или просто пришли ссылку сообщением.
     2. Я покажу превью — название, автора, длительность.
-    3. Нажми «{ btn-confirm }» под превью, и я пришлю файл сюда же.
+    3. Выбери «{ btn-confirm-video }» или «{ btn-confirm-audio }» под превью, и я пришлю файл сюда же.
 
     Команды:
     /preview ссылка — только информация о видео
