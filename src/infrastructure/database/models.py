@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from src.domain.value_objects.enums import DownloadStatus, MediaType
+from src.domain.value_objects.format_kind import FormatKind
 from src.infrastructure.database.engine import Base
 
 
@@ -43,6 +44,12 @@ class DownloadRequestModel(Base):
     )
     status: Mapped[DownloadStatus] = mapped_column(
         String(20), default=DownloadStatus.PENDING, server_default=DownloadStatus.PENDING.value
+    )
+    # Day 11A: what the user asked for (video vs mp3). server_default =
+    # "video" so any row created before this migration reads back as a
+    # normal video download — the pre-Day-11 behaviour, unchanged.
+    format_kind: Mapped[FormatKind] = mapped_column(
+        String(20), default=FormatKind.VIDEO, server_default=FormatKind.VIDEO.value
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

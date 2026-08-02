@@ -1,4 +1,4 @@
-## Universal Media Downloader — English locale (Day 9, extended Day 10)
+## Universal Media Downloader — English locale (Day 9, extended Day 10, Day 11A)
 ## Same keys as ru/messages.ftl. Missing a key here is a hard error
 ## (raise_key_error=True), so both locales stay structurally in sync.
 
@@ -6,6 +6,9 @@
 btn-download = ⬇️ Download
 btn-help = ℹ️ Help
 btn-confirm = ✅ Download
+# Day 11A: two confirm buttons under the preview (video / mp3).
+btn-confirm-video = ⬇️ Video
+btn-confirm-audio = 🎵 MP3
 btn-cancel = ❌ Cancel
 
 # --- Menu commands (set_my_commands) ---
@@ -35,7 +38,7 @@ help-text =
     How to use:
     1. Tap “{ btn-download }” below or just send a link as a message.
     2. I'll show a preview — title, author, duration.
-    3. Tap “{ btn-confirm }” under the preview and I'll send the file right here.
+    3. Choose “{ btn-confirm-video }” or “{ btn-confirm-audio }” under the preview and I'll send the file right here.
 
     Commands:
     /preview link — video info only

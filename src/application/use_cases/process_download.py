@@ -16,6 +16,14 @@ key + the user's stored language into a message. This replaces the old
 ``f"Не удалось скачать: {exc}"`` — which was both hardcoded to one
 language in the Application layer AND leaked the raw exception text to
 the user (bug #6).
+
+Day 11A.1 — HOTFIX. The requested ``format_kind`` (video/mp3) is now
+threaded from the persisted request into ``DownloadOptions``. It was
+persisted correctly in 11A but this last read-side link was missing, so
+``DownloadOptions`` always used its ``VIDEO`` default and the worker
+downloaded video even when the user tapped MP3. This is the ONE line
+that closes the loop between "what the user asked for" (in the DB) and
+"what yt-dlp actually fetches".
 """
 
 from __future__ import annotations
@@ -115,6 +123,10 @@ class ProcessDownloadUseCase:
             output_dir=output_dir,
             max_filesize_bytes=self._max_deliverable_file_size_bytes,
             timeout_seconds=self._download_timeout_seconds,
+            # Day 11A.1: carry the user's chosen format through to yt-dlp.
+            # Without this the DownloadOptions default (VIDEO) wins and the
+            # MP3 button silently delivers video.
+            format_kind=request.format_kind,
         )
 
         try:

@@ -30,6 +30,15 @@ generic fallback). The raw message stays in the LOG only — the raised
 exception carries a semantic ``error_key``, never the diagnostic text
 (bug #6). The Presentation layer and the worker path both map that key
 to a localized message.
+
+**Day 11A — audio vs video.** ``download()`` now honours
+``options.format_kind``. VIDEO keeps the exact pre-Day-11 ydl_opts
+(``best[ext=mp4]/best`` + mp4 merge). AUDIO switches to ``bestaudio/best``
+plus an ``FFmpegExtractAudio`` postprocessor that produces an mp3 — the
+system ffmpeg binary (already required, PROJECT_SPEC §2) does the
+transcode. The final filename still comes from ``post_hooks`` (bug #4):
+the postprocessor changes the extension to .mp3, and post_hooks reports
+the real post-transcode path, so no prediction is needed.
 """
 
 from __future__ import annotations
@@ -49,6 +58,7 @@ from src.domain.exceptions import (
 )
 from src.domain.value_objects.download_options import DownloadOptions
 from src.domain.value_objects.enums import MediaType
+from src.domain.value_objects.format_kind import FormatKind
 from src.domain.value_objects.media_preview import MediaPreview
 from src.infrastructure.downloader.error_classifier import classify_error
 from src.shared.logging import get_logger
@@ -88,6 +98,67 @@ def _guess_media_type(info: dict[str, Any]) -> MediaType:
     if info.get("acodec") not in (None, "none"):
         return MediaType.AUDIO
     return MediaType.UNKNOWN
+
+
+def _build_download_ydl_opts(
+    output_dir: str,
+    max_filesize_bytes: int | None,
+    format_kind: FormatKind,
+    post_hook: Any,
+) -> dict[str, Any]:
+    """Assemble the ydl_opts for the real download.
+
+    Day 11A: the ONLY difference between video and audio lives here — the
+    ``format`` selector and (for audio) the ``FFmpegExtractAudio``
+    postprocessor. Everything else (retries, timeouts, restrictfilenames,
+    the youtube extractor_args, post_hooks) is identical across both, so
+    it's built once and the format-specific keys are layered on top. This
+    keeps the two paths from drifting: a retry/timeout tweak applies to
+    both automatically.
+    """
+    ydl_opts: dict[str, Any] = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "outtmpl": f"{output_dir}/%(id)s.%(ext)s",
+        "restrictfilenames": True,
+        "socket_timeout": 30,
+        "retries": 10,
+        "fragment_retries": 10,
+        "continuedl": True,
+        "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+        "post_hooks": [post_hook],
+    }
+
+    if format_kind is FormatKind.AUDIO:
+        # bestaudio, then transcode to mp3 via the system ffmpeg. The
+        # postprocessor rewrites the extension; post_hooks reports the
+        # real .mp3 path afterwards (bug #4), so no filename prediction.
+        ydl_opts["format"] = "bestaudio/best"
+        ydl_opts["postprocessors"] = [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }
+        ]
+    else:
+        # Unchanged pre-Day-11 video behaviour.
+        ydl_opts["format"] = "best[ext=mp4]/best"
+        ydl_opts["merge_output_format"] = "mp4"
+
+    if max_filesize_bytes:
+        # Also passed to yt-dlp itself as a backstop, but NOT relied
+        # on as the primary mechanism: yt-dlp aborts silently (no
+        # exception) when a download exceeds max_filesize, leaving a
+        # partial .part file behind — that's exactly the bug this
+        # class of "file missing after reported success" turned out
+        # to be. The proactive check below (using extract_info
+        # without downloading first) is the real fix: it fails fast,
+        # with a clear reason, before any bytes are transferred.
+        ydl_opts["max_filesize"] = max_filesize_bytes
+
+    return ydl_opts
 
 
 def _raise_classified(message: str, url: str) -> None:
@@ -161,6 +232,7 @@ def _download_worker_entrypoint(
     url: str,
     output_dir: str,
     max_filesize_bytes: int | None,
+    format_kind_value: str,
     result_queue: multiprocessing.Queue[tuple[str, str]],
 ) -> None:
     """Entrypoint for the child process. This is the isolation boundary —
@@ -168,43 +240,27 @@ def _download_worker_entrypoint(
     killed independently of the worker's event loop.
 
     Must be a module-level function (not a closure/lambda): the "spawn"
-    start method pickles the target, and closures aren't picklable.
+    start method pickles the target, and closures aren't picklable. For
+    the same reason ``format_kind`` crosses the boundary as its plain
+    string value and is reconstructed into the enum here.
     """
     try:
         # `post_hooks` is yt-dlp's own documented mechanism for exactly
         # this problem: it's called with the REAL final filename, after
-        # every postprocessor (merger, remuxer, etc.) has finished —
-        # not a prediction from the pre-download info dict.
+        # every postprocessor (merger, remuxer, audio-extract, etc.) has
+        # finished — not a prediction from the pre-download info dict.
         final_filenames: list[str] = []
 
         def _record_final_filename(filename: str) -> None:
             final_filenames.append(filename)
 
-        ydl_opts: dict[str, Any] = {
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-            "outtmpl": f"{output_dir}/%(id)s.%(ext)s",
-            "format": "best[ext=mp4]/best",
-            "merge_output_format": "mp4",
-            "restrictfilenames": True,
-            "socket_timeout": 30,
-            "retries": 10,
-            "fragment_retries": 10,
-            "continuedl": True,
-            "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
-            "post_hooks": [_record_final_filename],
-        }
-        if max_filesize_bytes:
-            # Also passed to yt-dlp itself as a backstop, but NOT relied
-            # on as the primary mechanism: yt-dlp aborts silently (no
-            # exception) when a download exceeds max_filesize, leaving a
-            # partial .part file behind — that's exactly the bug this
-            # class of "file missing after reported success" turned out
-            # to be. The proactive check below (using extract_info
-            # without downloading first) is the real fix: it fails fast,
-            # with a clear reason, before any bytes are transferred.
-            ydl_opts["max_filesize"] = max_filesize_bytes
+        format_kind = FormatKind(format_kind_value)
+        ydl_opts = _build_download_ydl_opts(
+            output_dir=output_dir,
+            max_filesize_bytes=max_filesize_bytes,
+            format_kind=format_kind,
+            post_hook=_record_final_filename,
+        )
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             if max_filesize_bytes:
@@ -329,6 +385,7 @@ def _run_download_in_process(
     output_dir: str,
     max_filesize_bytes: int | None,
     timeout_seconds: int,
+    format_kind_value: str,
 ) -> str:
     """Blocking. Must only be called via loop.run_in_executor() — never
     directly on the event loop thread. The blocking call here is
@@ -339,7 +396,7 @@ def _run_download_in_process(
     result_queue: multiprocessing.Queue[tuple[str, str]] = ctx.Queue()
     process = ctx.Process(
         target=_download_worker_entrypoint,
-        args=(url, output_dir, max_filesize_bytes, result_queue),
+        args=(url, output_dir, max_filesize_bytes, format_kind_value, result_queue),
     )
     process.start()
     process.join(timeout_seconds)
@@ -405,6 +462,7 @@ class YtDlpDownloader:
                 str(options.output_dir),
                 options.max_filesize_bytes,
                 options.timeout_seconds,
+                options.format_kind.value,
             )
         except _DownloadTimeoutError as exc:
             logger.warning("download_failed", url=url, error=str(exc), reason="timeout")

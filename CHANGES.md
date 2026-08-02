@@ -1,104 +1,128 @@
-# Day 10 — Категоризация ошибок yt-dlp + локализованные сообщения
+# Day 11A — Выбор формата: видео / mp3
 
 Инкрементальный патч. Распаковать `unzip -o` поверх корня проекта.
 
 ## Что сделано
 
-Раньше любой сбой извлечения/скачивания превращался в одно общее
-сообщение («не удалось получить информацию»). Теперь ошибки yt-dlp
-классифицируются в доменные категории, и пользователь получает чистое
-**локализованное** сообщение по семантике сбоя. Реальный повод — TikTok
-photo/slideshow пост (`/photo/...`), который yt-dlp отдаёт как
-`Unsupported URL`; теперь это честное «фото/слайдшоу, пока не умею», а не
-«сайт не поддерживается» и не «попробуй другую ссылку».
+Под превью теперь **две кнопки подтверждения** вместо одной: «⬇️ Видео» и
+«🎵 MP3». Пользователь выбирает, что скачать — исходное видео или только
+аудиодорожку, извлечённую в mp3 (транскод системным ffmpeg). Выбор
+доезжает до воркера через БД (поле запроса), а не через payload очереди —
+воркер, как и раньше, восстанавливает весь запрос из базы по id.
 
-### Категории (все — подклассы `ExtractionError`, обратная совместимость)
+Это первая половина Day 11. Вторая (11B) — прогресс скачивания в
+реальном времени — отдельным патчем, т.к. трогает рантайм-инициализацию
+(worker/bot startup) и требует live-прогона.
 
-| Класс | error_key | Когда |
-|---|---|---|
-| `PrivateContentError` | `error-private` | приватный аккаунт / login-wall |
-| `GeoRestrictedError` | `error-geo` | геоблок |
-| `AgeRestrictedError` | `error-age` | возрастное ограничение |
-| `ContentUnavailableError` | `error-unavailable` | удалено / не существует |
-| `UnsupportedMediaError` | `error-unsupported-media` | сайт поддержан, медиа — нет (фото/слайдшоу) |
-| `DownloadTimeoutError` | `error-timeout` | скачивание прервано по таймауту |
-| `FileTooLargeError` | `error-too-large` | превышен лимит размера (несёт числа) |
-| `ExtractionError` (fallback) | `error-extraction-failed` | неопознанное |
-| `UnsupportedURLError` | `error-unsupported-site` | реально неподдерживаемый сайт / битая ссылка |
+## Архитектурное решение (зафиксировано до кода)
 
-`error_key` — **семантический идентификатор**, не текст: домен не знает
-языков. Presentation и worker резолвят его в строку.
+**`format_kind` — свойство запроса, живёт в домене и в БД.** Это то,
+ЧТО качать — атрибут `DownloadRequest`, а не деталь транспорта. Поэтому:
+поле сущности → колонка → миграция → маппинг в репозитории. Контраст с
+11B, где координаты «⏳»-сообщения (КУДА рисовать прогресс) — деталь
+доставки и поедут в payload задачи, не в домене. Разделение по
+Dependency Rule (PROJECT_SPEC §6.1): Telegram-специфика не течёт в домен.
+
+**Аудио = mp3 через `FFmpegExtractAudio`.** Предсказуемый универсальный
+контейнер, ffmpeg уже обязателен (PROJECT_SPEC §2). Финальное имя файла —
+по-прежнему из `post_hooks` (баг №4): постпроцессор меняет расширение на
+.mp3, post_hooks отдаёт реальный путь после транскода — предсказание не
+нужно, mp3-путь покрыт тем же механизмом, что и video-мёрж.
 
 ## Новые файлы
 
-- `src/infrastructure/downloader/error_classifier.py` — `classify_error(message, url)`:
-  yt-dlp сообщение → доменный тип. Матчинг по устойчивым сигнатурам,
-  порядок = приоритет. `Unsupported URL` + `/photo/`|`slideshow` →
-  `UnsupportedMediaError`; голое → `UnsupportedURLError`. Неопознанное →
-  `ExtractionError`. **Сигнатуры проверены на корпусе реальных строк
-  yt-dlp** (см. `tests/unit/test_error_classifier.py`).
-- `src/domain/interfaces/error_localizer.py` — `ErrorLocalizerPort`
-  (`localize(error_key, locale, **kwargs)`). Домен-порт для worker-пути.
-- `src/infrastructure/localization/fluent_error_localizer.py` —
-  `FluentErrorLocalizer` над тем же Fluent-ядром, что и Telegram-слой, но
-  **всегда с явной локалью** (баг #10). Для worker-процесса, где нет
-  `I18nContext`.
-- `tests/unit/test_error_classifier.py`, `test_error_localizer.py`,
-  `test_process_download_errors.py` — 38 тестов.
+- `src/domain/value_objects/format_kind.py` — `FormatKind` (VIDEO/AUDIO).
+  Отдельно от `MediaType`: `MediaType` — чем ЯВЛЯЕТСЯ источник, `FormatKind`
+  — что ЗАПРОСИЛ пользователь. Одно видео можно скачать и как video, и как
+  mp3 — это разные намерения, значит разные концепты.
+- `infra/alembic/versions/0003_download_request_format_kind.py` — колонка
+  `download_requests.format_kind` String(20), NOT NULL, server_default
+  `'video'` (существующие строки backfill'ятся в video без отдельного
+  data-шага — как вводился media_type). **Проверь `down_revision`:**
+  указан `"0002_user_language"` — если фактический revision id в твоём
+  0002-файле другой, поправь одну строку.
+- `tests/unit/test_confirm_callback.py` — encode/decode callback, legacy
+  bare-форма, неизвестный код → video, бюджет 64 байта, сохранение
+  префикса `dl:` для роутера.
+- `tests/unit/test_download_ydl_opts.py` — video/audio ветки ydl_opts,
+  инвариант «общие опции надёжности идентичны в обоих форматах»,
+  max_filesize backstop.
+- `tests/unit/test_request_download_format.py` — проброс format_kind в
+  use case (дефолт video / явный audio), дефолт на уровне сущности.
+- `tests/unit/test_ytdlp_downloader.py` — **починка тестового долга.**
+  `_run_download_in_process` получил 5-й позиционный аргумент
+  (`format_kind_value`), а 4 существующих теста мокали её сигнатурой на
+  4 аргумента → `TypeError: takes 4 positional arguments but 5 were
+  given`. Четыре мока (1 lambda + 3 def) обновлены: принимают
+  `format_kind_value` и игнорируют его. Логика/ассерты не тронуты —
+  тесты проверяют маппинг исключений `download()`, который от формата не
+  зависит. Файл включён в патч целиком, чтобы zip был самодостаточным.
 
 ## Изменённые файлы
 
-- `src/domain/exceptions.py` — добавлены 7 категорий + `error_key` на
-  всех. `FileTooLargeError(estimated_mb, limit_mb)` несёт числа.
-- `src/infrastructure/downloader/ytdlp_downloader.py` — классификация в
-  **обоих** путях: `get_preview` (ловит `DownloadError`) и `download`
-  (child-процесс ловит `DownloadError` → тег `extract_error` → родитель
-  классифицирует). Сырой текст yt-dlp — **только в лог** (баг #6);
-  наружу летит категоризированное исключение с `error_key`. Таймаут и
-  too-large получили собственные ключи. Русская строка про размер убрана
-  из child-процесса — теперь `FileTooLargeError` с числами (локализуемо).
-- `src/application/use_cases/process_download.py` — инжектится
-  `error_localizer: ErrorLocalizerPort`. При сбое: `exc.error_key` +
-  `user.language` → локализованная строка. **Убраны два бага:** хардкод
-  `f"Не удалось скачать: {exc}"` (нелокализованная строка в Application +
-  утечка `{exc}` юзеру). Доставка тоже локализована (`error-delivery-failed`).
-- `src/presentation/telegram/formatting.py` — новый `format_download_error(i18n, exc)`:
-  единая точка `error_key → i18n.get`, `FileTooLargeError` с аргументами.
-- `src/presentation/telegram/handlers/preview.py`,
-  `handlers/download_flow.py` — используют `format_download_error`.
-  **Важно:** `error-bad-url` (наша валидация allowlist, `reason`
-  безопасен) и категоризированные ошибки загрузчика — **разные точки
-  catch**, чтобы не потерять наш reason и не слить диагностику yt-dlp.
-- `src/infrastructure/queue/worker_settings.py` — строит i18n-ядро
-  (`await core.startup()`, баг #11) + `FluentErrorLocalizer` в `ctx`.
-- `src/infrastructure/queue/jobs.py` — прокидывает `error_localizer` в
-  use case.
-- `locales/{ru,en}/messages.ftl` — 8 новых ключей (см. таблицу +
-  `error-delivery-failed`). **`error-extraction-failed` потерял `{ $reason }`**
-  (Day 10: сырой reason юзеру больше не показывается). Локали структурно
-  синхронны (47 ключей, проверено).
+- `src/domain/value_objects/download_options.py` — `+ format_kind:
+  FormatKind = VIDEO` (opt-in, обратная совместимость).
+- `src/domain/entities/download_request.py` — `+ format_kind` поле и
+  аргумент `create(..., format_kind=VIDEO)`.
+- `src/infrastructure/database/models.py` — колонка `format_kind`
+  (server_default "video").
+- `src/infrastructure/database/repositories/download_request_repository.py`
+  — маппинг `format_kind` в `_to_entity` и `create`. В `update` НЕ
+  трогается: формат неизменяем после создания.
+- `src/application/use_cases/request_download.py` — `execute(telegram_id,
+  url, format_kind=VIDEO)`; кладёт формат в сущность.
+- `src/infrastructure/downloader/ytdlp_downloader.py` — новый
+  `_build_download_ydl_opts(...)` (единая сборка opts, format-специфичные
+  ключи слоями поверх общих); `format_kind` проброшен через
+  `download → _run_download_in_process → _download_worker_entrypoint` как
+  строковое значение (spawn/pickle-безопасно) и реконструирован в enum в
+  child. Video-ветка байт-в-байт прежняя.
+- `src/presentation/telegram/keyboards.py` — `preview_confirm_keyboard`
+  рисует две кнопки формата + отмену; `confirm_callback_data(token, fmt)`
+  и `parse_confirm_callback(data)` — encode/decode с суффиксом формата
+  (`dl:<token>:v|a`), терпит legacy `dl:<token>`.
+- `src/presentation/telegram/handlers/download_flow.py` —
+  `handle_confirm_download` парсит формат из callback, передаёт в use
+  case; лог `format_kind`. Роутер по-прежнему `startswith("dl:")` —
+  ловит обе кнопки.
+- `locales/{ru,en}/messages.ftl` — `+ btn-confirm-video`,
+  `+ btn-confirm-audio`; `help-text` шаг 3 обновлён под две кнопки.
+  `btn-confirm` оставлен (на случай ссылок), локали структурно синхронны.
 
-## Проверено
+## Проверено (в песочнице Claude, Python 3.12)
 
-- `pytest` — 38 новых тестов зелёные (классификатор на реальном корпусе,
-  локализатор, worker-путь; проверка «сырой текст не утекает»).
-- `ruff check` — чисто.
-- `mypy --strict` — чисто.
-- **Live-прогон worker-пути** (эмуляция startup + `ProcessDownloadUseCase`
-  с реальным `FluentErrorLocalizer`): локализация по `user.language`,
-  `None → en`, числовые аргументы, без краша (урок 9.1 — рантайм-
-  инициализацию проверять прогоном, не только юнит-тестами).
+- `parse_confirm_callback` / `confirm_callback_data`: roundtrip
+  video+audio, legacy bare-форма → video, неизвестный код → video,
+  callback 37 байт (лимит 64), префикс `dl:` сохранён.
+- `_build_download_ydl_opts`: video = `best[ext=mp4]/best` + mp4-merge,
+  audio = `bestaudio/best` + FFmpegExtractAudio mp3; общие опции
+  надёжности идентичны; max_filesize backstop на обоих путях.
+- Проброс format_kind через `RequestDownloadUseCase` (дефолт video /
+  явный audio), дефолт на уровне сущности.
+- Починенный `test_ytdlp_downloader.py`: 4 ранее падавших теста
+  (`TypeError` от нового 5-го аргумента) зелёные, 7 прежних не задеты.
+- 25 тестов зелёные (14 новых + 11 в починенном ytdlp_downloader);
+  `ruff check` чисто; все файлы патча компилируются.
 
-## ⚠️ Одно поведенческое изменение для проверки в бою
+## ⚠️ Прогнать локально перед коммитом (среда 3.13)
 
-`error-extraction-failed` больше **не принимает** `{ $reason }`. Если
-где-то в коде остался вызов `i18n.get("error-extraction-failed", reason=...)`
-— лишний аргумент безопасно игнорируется Fluent, но текст reason больше
-не покажется (это и была цель — не течь диагностикой). Проверь, что таких
-вызовов не осталось (в патче их нет).
+1. **Полный `pytest`** — на реальном коде (3.13) должен быть полностью
+   зелёным: первый прогон 11A дал 4 падения в `test_ytdlp_downloader.py`
+   (`TypeError` от нового 5-го аргумента `_run_download_in_process`) —
+   **исправлено в этом же патче** (см. выше), теперь 195/195 ожидаемо
+   зелёные. В песочнице Claude — 3.12 + faithful-стабы части closure, на
+   реальном коде прогнать весь набор для подтверждения.
+2. **`mypy --strict src`** — в песочнице не гонялся (нет полного
+   окружения типов). Ожидаемо чисто: новые сигнатуры полностью
+   типизированы, `FormatKind` — StrEnum.
+3. **Миграция:** `alembic upgrade head` на чистой БД и поверх
+   существующей (проверить backfill server_default). Сверить
+   `down_revision` с фактическим revision id файла 0002.
+4. Быстрый живой прогон: превью → «🎵 MP3» → приходит mp3; превью →
+   «⬇️ Видео» → приходит mp4 (регресс video-пути).
 
-## Не сделано (по плану — отдельный день)
+## Не входит в 11A (следующий патч 11B)
 
-Фото/карусели как **скачиваемый** контент (расширение `MediaType.PHOTO`
-и логики отправки нескольких файлов). Сейчас фото-пост честно
-распознаётся и отклоняется с `error-unsupported-media`.
+Прогресс скачивания в реальном времени (progress_hooks → mp-очередь →
+Redis pub/sub → editMessageText с троттлингом). Трогает startup —
+обязателен live-прогон (урок 9.1).

@@ -25,9 +25,18 @@ Day 10 — two DISTINCT origins of ``UnsupportedURLError`` are kept apart:
 Mixing these up would either lose our helpful validation reason or leak
 yt-dlp diagnostics — so the two catch sites stay separate.
 
+Day 11A — the preview card now offers two confirm buttons (video / mp3).
+Both share one token; the chosen format is encoded in the callback
+payload and parsed by ``parse_confirm_callback``. The parsed
+``FormatKind`` is threaded into RequestDownloadUseCase, which persists it
+on the request so the worker downloads the right thing. Everything else
+about the confirm path (token lookup, rate limit ordering, stale-preview
+handling) is unchanged.
+
 Everything else is unchanged: URLs are stashed under a short token
-(callback_data can't hold a URL), ✅ resolves the token and calls the same
-RequestDownloadUseCase /download uses, the Application layer is untouched.
+(callback_data can't hold a URL), the confirm button resolves the token
+and calls the same RequestDownloadUseCase /download uses, the Application
+layer contract is the same bar the new optional argument.
 """
 
 from __future__ import annotations
@@ -69,6 +78,7 @@ from src.presentation.telegram.keyboards import (
     CB_CONFIRM_PREFIX,
     CB_FLOW_DOWNLOAD,
     CB_FLOW_HELP,
+    parse_confirm_callback,
     preview_confirm_keyboard,
 )
 from src.presentation.telegram.states import DownloadFlow
@@ -233,7 +243,11 @@ async def handle_confirm_download(
     settings: Settings,
     rate_limiter: RateLimiterPort,
 ) -> None:
-    token = (callback.data or "")[len(CB_CONFIRM_PREFIX):]
+    # Day 11A: the payload now carries the chosen format after the token.
+    # parse_confirm_callback tolerates the legacy bare "dl:<token>" form
+    # (defaults to video), so buttons rendered before this deploy still
+    # work.
+    token, format_kind = parse_confirm_callback(callback.data or "")
     url = await preview_store.get(token)
 
     if url is None:
@@ -263,7 +277,7 @@ async def handle_confirm_download(
             task_queue=ArqTaskQueue(arq_pool),
         )
         try:
-            request = await use_case.execute(telegram_id, url)
+            request = await use_case.execute(telegram_id, url, format_kind)
         except UnsupportedURLError as exc:
             # Our validator again (RequestDownloadUseCase re-validates).
             await callback.answer(
@@ -271,7 +285,12 @@ async def handle_confirm_download(
             )
             return
 
-    logger.info("flow_download_confirmed", request_id=str(request.id), telegram_id=telegram_id)
+    logger.info(
+        "flow_download_confirmed",
+        request_id=str(request.id),
+        telegram_id=telegram_id,
+        format_kind=format_kind.value,
+    )
 
     if isinstance(callback.message, Message):
         current_text = callback.message.text or ""
