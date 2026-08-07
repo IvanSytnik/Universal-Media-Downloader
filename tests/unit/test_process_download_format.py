@@ -34,7 +34,9 @@ class _CapturingDownloader:
     async def get_preview(self, url: str):  # pragma: no cover - unused here
         raise NotImplementedError
 
-    async def download(self, url: str, options: DownloadOptions) -> Path:
+    async def download(
+        self, url: str, options: DownloadOptions, progress_callback=None
+    ) -> Path:
         self.captured_options = options
         return Path("/tmp/out.bin")
 
@@ -76,6 +78,11 @@ class _FakeErrorLocalizer:
         return error_key
 
 
+class _NoopProgressPublisher:
+    async def publish(self, request_id, chat_id, message_id, language, progress) -> None:
+        pass
+
+
 def _make_use_case(request: DownloadRequest, downloader: _CapturingDownloader):
     user = User(id=request.user_id, telegram_id=555)
     return ProcessDownloadUseCase(
@@ -85,6 +92,7 @@ def _make_use_case(request: DownloadRequest, downloader: _CapturingDownloader):
         storage=_FakeStorage(),
         notifier=_FakeNotifier(),
         error_localizer=_FakeErrorLocalizer(),
+        progress_publisher=_NoopProgressPublisher(),
         max_deliverable_file_size_bytes=50 * 1024 * 1024,
         download_timeout_seconds=1800,
     )
@@ -98,7 +106,7 @@ async def test_audio_request_passes_audio_to_downloader() -> None:
         format_kind=FormatKind.AUDIO,
     )
     downloader = _CapturingDownloader()
-    await _make_use_case(request, downloader).execute(request.id)
+    await _make_use_case(request, downloader).execute(request.id, chat_id=1, message_id=2)
 
     assert downloader.captured_options is not None
     assert downloader.captured_options.format_kind is FormatKind.AUDIO
@@ -112,7 +120,7 @@ async def test_video_request_passes_video_to_downloader() -> None:
         format_kind=FormatKind.VIDEO,
     )
     downloader = _CapturingDownloader()
-    await _make_use_case(request, downloader).execute(request.id)
+    await _make_use_case(request, downloader).execute(request.id, chat_id=1, message_id=2)
 
     assert downloader.captured_options is not None
     assert downloader.captured_options.format_kind is FormatKind.VIDEO

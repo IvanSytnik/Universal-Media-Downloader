@@ -1,4 +1,14 @@
-"""/download <url> — enqueues an actual download. Day 9: localized."""
+"""/download <url> — enqueues an actual download. Day 9: localized.
+
+Day 11B: progress needs a message to edit, so the "download-started"
+status message is now sent BEFORE enqueueing (not after) and its
+(chat_id, message_id) is threaded into RequestDownloadUseCase; on a
+validation failure that same message is edited into the error instead of
+a second message being sent. Trade-off: an invalid link now briefly
+shows "download started" before flipping to the error, whereas before
+the error appeared immediately — accepted so progress always has
+somewhere to go, consistent with download_flow.py's guided path.
+"""
 
 from __future__ import annotations
 
@@ -58,6 +68,8 @@ async def handle_download(
         await message.answer(format_retry_after(i18n, verdict.retry_after_seconds))
         return
 
+    status_message = await message.answer(i18n.get("download-started"))
+
     async with session_scope(session_factory) as session:
         use_case = RequestDownloadUseCase(
             user_repository=SqlAlchemyUserRepository(session),
@@ -65,10 +77,14 @@ async def handle_download(
             task_queue=ArqTaskQueue(arq_pool),
         )
         try:
-            request = await use_case.execute(telegram_id, url)
+            request = await use_case.execute(
+                telegram_id,
+                url,
+                chat_id=status_message.chat.id,
+                message_id=status_message.message_id,
+            )
         except UnsupportedURLError as exc:
-            await message.answer(i18n.get("error-bad-url", reason=html_escape(str(exc))))
+            await status_message.edit_text(i18n.get("error-bad-url", reason=html_escape(str(exc))))
             return
 
     logger.info("download_requested", request_id=str(request.id), telegram_id=telegram_id)
-    await message.answer(i18n.get("download-started"))

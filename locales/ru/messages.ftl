@@ -1,4 +1,4 @@
-## Universal Media Downloader — русская локаль (Day 9, дополнено Day 10, Day 11A)
+## Universal Media Downloader — русская локаль (Day 9, дополнено Day 10, Day 11A, Day 11B)
 ## Все строки Presentation-слоя. Ключи сгруппированы по хендлерам.
 
 # --- Кнопки (их ТЕКСТ участвует в роутинге — см. i18n.collect_button_translations) ---
@@ -99,6 +99,18 @@ error-timeout = Скачивание заняло слишком много вр
 error-too-large = Видео слишком большое для Telegram (~{ $estimated_mb } МБ при лимите { $limit_mb } МБ).
 # Доставка (скачали, но не отправилось) — worker-путь.
 error-delivery-failed = Скачал видео, но не смог отправить его в Telegram. Попробуй ещё раз позже.
+
+# --- Прогресс скачивания (Day 11B) ---
+# Рендерится ВНЕ контекста апдейта (долгоживущий слушатель в bot-процессе,
+# см. progress_listener.py) — только через явную локаль (баг №10).
+# $percent — целое число (0-100).
+progress-downloading = ⏳ Скачиваю… { $percent }%
+# Для стримов без известного total_bytes (percent = None): $mb — число,
+# $speed — уже готовая строка вида "1.2 МБ/с" (как $platforms в help-text).
+progress-downloading-nostream = ⏳ Скачано { $mb } МБ ({ $speed })
+# Day 11B.1 — граница download→постпроцессинг, только audio-путь (mp3).
+# Без процента: прогресс самого транскода вне scope.
+progress-converting = ⏳ Конвертирую в MP3…
 
 # --- /download ---
 download-usage = Использование: /download ссылка

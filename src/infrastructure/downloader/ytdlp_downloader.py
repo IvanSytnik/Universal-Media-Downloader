@@ -39,13 +39,55 @@ system ffmpeg binary (already required, PROJECT_SPEC §2) does the
 transcode. The final filename still comes from ``post_hooks`` (bug #4):
 the postprocessor changes the extension to .mp3, and post_hooks reports
 the real post-transcode path, so no prediction is needed.
+
+**Day 11B — real-time progress.** ``download()`` accepts an optional
+``progress_callback`` (async, domain-shaped: takes a ``DownloadProgress``
+— see ``DownloaderPort``). yt-dlp's own ``progress_hooks`` run *inside
+the child process*, synchronously, on its own thread of control — they
+cannot themselves ``await`` anything. Bridging that to an async callback
+on the event loop needs two hops, each using the narrowest thread-safe
+primitive for its boundary:
+
+1. Child → executor thread: the child's progress hook puts a small raw
+   dict onto a second ``multiprocessing.Queue`` (``progress_queue``,
+   alongside the existing ``result_queue``). ``_wait_and_drain_progress``
+   (still running inside ``run_in_executor``, exactly where
+   ``process.join(timeout)`` used to block alone) now polls that queue
+   with a short timeout instead of one long blocking join — this is what
+   lets progress out *during* the download without changing the
+   timeout/terminate contract at all (see its docstring).
+2. Executor thread → event loop: each drained item is handed to a plain
+   **synchronous** ``progress_sink`` callback (internal to this module,
+   never crosses the ``DownloaderPort`` boundary). ``download()`` builds
+   ``progress_sink`` as a closure that does exactly one thing —
+   ``loop.call_soon_threadsafe(bridge.put_nowait, raw)`` — the only
+   sanctioned way to touch an ``asyncio.Queue`` from another thread. A
+   dedicated asyncio task then drains ``bridge`` natively on the event
+   loop and ``await``s the real (domain-facing) ``progress_callback`` for
+   each item — zero blocking of the event loop at any point, and the
+   drain-task side is fully testable without real threads or processes.
+
+Progress hooks fire during the download phase; yt-dlp's own detailed
+postprocessing progress (ffmpeg mp3 transcode percentage) is still out
+of scope (TASK_Day11B.md) — but the download→postprocess BOUNDARY itself
+is now surfaced (Day 11B.1). yt-dlp's ``status == "finished"`` event
+already marks that exact boundary; it used to be discarded outright (see
+_download_worker_entrypoint's docstring history). AUDIO downloads now
+forward it as a single ``DownloadProgress(phase=ProgressPhase.CONVERTING)``
+snapshot through the same queue/bridge/callback path as every other
+progress event — no second channel. VIDEO downloads never emit it: there
+is no user-visible "converting" step on that path.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import multiprocessing
 import os
+import queue
+import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -56,10 +98,13 @@ from src.domain.exceptions import (
     ExtractionError,
     FileTooLargeError,
 )
+from src.domain.interfaces.downloader import ProgressCallback
 from src.domain.value_objects.download_options import DownloadOptions
+from src.domain.value_objects.download_progress import DownloadProgress
 from src.domain.value_objects.enums import MediaType
 from src.domain.value_objects.format_kind import FormatKind
 from src.domain.value_objects.media_preview import MediaPreview
+from src.domain.value_objects.progress_phase import ProgressPhase
 from src.infrastructure.downloader.error_classifier import classify_error
 from src.shared.logging import get_logger
 
@@ -105,6 +150,7 @@ def _build_download_ydl_opts(
     max_filesize_bytes: int | None,
     format_kind: FormatKind,
     post_hook: Any,
+    progress_hook: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Assemble the ydl_opts for the real download.
 
@@ -115,6 +161,12 @@ def _build_download_ydl_opts(
     it's built once and the format-specific keys are layered on top. This
     keeps the two paths from drifting: a retry/timeout tweak applies to
     both automatically.
+
+    Day 11B: ``progress_hook`` (optional, defaults to no hook at all) is
+    yt-dlp's own ``progress_hooks`` mechanism — distinct from
+    ``post_hook``/``post_hooks``, which fires once at the very end.
+    Defaulting to None (rather than requiring every caller to pass one)
+    keeps the existing direct tests of this function unchanged.
     """
     ydl_opts: dict[str, Any] = {
         "quiet": True,
@@ -128,6 +180,7 @@ def _build_download_ydl_opts(
         "continuedl": True,
         "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
         "post_hooks": [post_hook],
+        "progress_hooks": [progress_hook] if progress_hook is not None else [],
     }
 
     if format_kind is FormatKind.AUDIO:
@@ -228,12 +281,42 @@ def _estimate_total_filesize(info: dict[str, Any] | None) -> int | None:
     return int(size) if size is not None else None
 
 
+def _translate_progress_status(
+    status: dict[str, Any], format_kind: FormatKind
+) -> dict[str, Any] | None:
+    """Pure decision logic for ``_record_progress`` (inside
+    ``_download_worker_entrypoint``): given one raw yt-dlp progress-hook
+    status dict, what (if anything) should land on ``progress_queue``?
+    Returns ``None`` when nothing should be forwarded.
+
+    Kept as a standalone module-level function — not inlined in the
+    closure — specifically so this decision is unit-testable without
+    spinning up a real child process, the same way ``_build_download_progress``
+    is testable in isolation (Day 11B.1).
+    """
+    if status.get("status") == "finished":
+        # Download→postprocess boundary. Audio-only: video has no
+        # ffmpeg transcode step on its path worth announcing.
+        if format_kind is FormatKind.AUDIO:
+            return {"phase": ProgressPhase.CONVERTING}
+        return None
+    if status.get("status") != "downloading":
+        return None
+    return {
+        "downloaded_bytes": status.get("downloaded_bytes"),
+        "total_bytes": status.get("total_bytes") or status.get("total_bytes_estimate"),
+        "speed": status.get("speed"),
+        "eta": status.get("eta"),
+    }
+
+
 def _download_worker_entrypoint(
     url: str,
     output_dir: str,
     max_filesize_bytes: int | None,
     format_kind_value: str,
     result_queue: multiprocessing.Queue[tuple[str, str]],
+    progress_queue: multiprocessing.Queue[dict[str, Any]],
 ) -> None:
     """Entrypoint for the child process. This is the isolation boundary —
     everything yt-dlp/ffmpeg does happens here, in a process that can be
@@ -243,6 +326,17 @@ def _download_worker_entrypoint(
     start method pickles the target, and closures aren't picklable. For
     the same reason ``format_kind`` crosses the boundary as its plain
     string value and is reconstructed into the enum here.
+
+    Day 11B: ``progress_queue`` carries yt-dlp's own ``progress_hooks``
+    events out to the parent — see the module docstring for the full
+    bridge. ``status == "downloading"`` events are forwarded as-is.
+
+    Day 11B.1: a ``status == "finished"`` event (fires once the download
+    itself is done, before any postprocessing) is forwarded too, but only
+    for AUDIO downloads and only as a bare phase marker
+    ``{"phase": ProgressPhase.CONVERTING}`` — it carries no byte/percent
+    data, just the boundary signal. VIDEO downloads still discard it:
+    there's no ffmpeg transcode step on that path worth announcing.
     """
     try:
         # `post_hooks` is yt-dlp's own documented mechanism for exactly
@@ -254,12 +348,21 @@ def _download_worker_entrypoint(
         def _record_final_filename(filename: str) -> None:
             final_filenames.append(filename)
 
+        def _record_progress(status: dict[str, Any]) -> None:
+            raw = _translate_progress_status(status, format_kind)
+            if raw is None:
+                return
+            # progress reporting must never break the download itself.
+            with contextlib.suppress(Exception):
+                progress_queue.put_nowait(raw)
+
         format_kind = FormatKind(format_kind_value)
         ydl_opts = _build_download_ydl_opts(
             output_dir=output_dir,
             max_filesize_bytes=max_filesize_bytes,
             format_kind=format_kind,
             post_hook=_record_final_filename,
+            progress_hook=_record_progress,
         )
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -380,26 +483,71 @@ def _resolve_downloaded_filepath(ydl: yt_dlp.YoutubeDL, info: dict[str, Any] | N
     return str(ydl.prepare_filename(info))
 
 
-def _run_download_in_process(
-    url: str,
-    output_dir: str,
-    max_filesize_bytes: int | None,
-    timeout_seconds: int,
-    format_kind_value: str,
-) -> str:
-    """Blocking. Must only be called via loop.run_in_executor() — never
-    directly on the event loop thread. The blocking call here is
-    `process.join(timeout)`, which is cheap (just waiting), not CPU work;
-    the actual yt-dlp/ffmpeg work happens in the child process.
+def _build_download_progress(raw: dict[str, Any]) -> DownloadProgress:
+    """Pure mapping: a raw progress-hook dict (as put on progress_queue by
+    the child, see _download_worker_entrypoint) → the domain
+    ``DownloadProgress`` value object. ``percent`` is None whenever
+    ``total_bytes`` is None (a stream yt-dlp can't size up front) —
+    callers render bytes/speed instead in that case.
+
+    Day 11B.1: a ``{"phase": ProgressPhase.CONVERTING}`` marker (no byte
+    fields at all) maps to a snapshot with everything else blank —
+    callers must check ``phase`` before touching the numeric fields.
     """
-    ctx = multiprocessing.get_context("spawn")
-    result_queue: multiprocessing.Queue[tuple[str, str]] = ctx.Queue()
-    process = ctx.Process(
-        target=_download_worker_entrypoint,
-        args=(url, output_dir, max_filesize_bytes, format_kind_value, result_queue),
+    if raw.get("phase") == ProgressPhase.CONVERTING:
+        return DownloadProgress(
+            percent=None,
+            downloaded_bytes=0,
+            total_bytes=None,
+            speed=None,
+            eta=None,
+            phase=ProgressPhase.CONVERTING,
+        )
+
+    downloaded = int(raw.get("downloaded_bytes") or 0)
+    total_raw = raw.get("total_bytes")
+    total_bytes = int(total_raw) if total_raw is not None else None
+    speed_raw = raw.get("speed")
+    eta_raw = raw.get("eta")
+    percent = (downloaded / total_bytes * 100) if total_bytes else None
+    return DownloadProgress(
+        percent=percent,
+        downloaded_bytes=downloaded,
+        total_bytes=total_bytes,
+        speed=float(speed_raw) if speed_raw is not None else None,
+        eta=int(eta_raw) if eta_raw is not None else None,
     )
-    process.start()
-    process.join(timeout_seconds)
+
+
+def _wait_and_drain_progress(
+    process: multiprocessing.process.BaseProcess,
+    progress_queue: multiprocessing.Queue[dict[str, Any]],
+    progress_sink: Callable[[dict[str, Any] | None], None] | None,
+    timeout_seconds: int,
+) -> None:
+    """Blocks the CALLING thread (must be an executor thread, never the
+    event loop) until `process` exits or `timeout_seconds` elapses,
+    whichever first — draining `progress_queue` into `progress_sink`
+    (when given) along the way instead of one long `process.join(timeout)`.
+
+    This is the ONE place the Day 5 terminate-by-timeout contract lives:
+    on timeout, `process.terminate()` + `process.join(5)` +
+    `_DownloadTimeoutError`, byte-for-byte the same as before Day 11B —
+    see tests/unit/test_process_kill_mechanism.py, which calls this
+    function directly (not a hand-copied mirror) against a real spawned
+    process to pin exactly this guarantee.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while process.is_alive():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            raw = progress_queue.get(timeout=min(0.5, remaining))
+        except queue.Empty:
+            continue
+        if progress_sink is not None:
+            progress_sink(raw)
 
     if process.is_alive():
         process.terminate()
@@ -407,6 +555,41 @@ def _run_download_in_process(
         raise _DownloadTimeoutError(
             f"Скачивание превысило лимит {timeout_seconds} секунд и было прервано"
         )
+
+    process.join()  # already exited — reap the zombie, effectively instant
+
+
+def _run_download_in_process(
+    url: str,
+    output_dir: str,
+    max_filesize_bytes: int | None,
+    timeout_seconds: int,
+    format_kind_value: str,
+    progress_sink: Callable[[dict[str, Any] | None], None] | None = None,
+) -> str:
+    """Blocking. Must only be called via loop.run_in_executor() — never
+    directly on the event loop thread. The blocking work here
+    (`_wait_and_drain_progress`) is cheap waiting/polling, not CPU work;
+    the actual yt-dlp/ffmpeg work happens in the child process.
+
+    Day 11B: sends a final `progress_sink(None)` in a `finally` — see
+    `_drain_bridge`'s docstring for why THIS function (not `download()`)
+    must be the one to signal "no more progress events are coming".
+    """
+    ctx = multiprocessing.get_context("spawn")
+    result_queue: multiprocessing.Queue[tuple[str, str]] = ctx.Queue()
+    progress_queue: multiprocessing.Queue[dict[str, Any]] = ctx.Queue()
+    process = ctx.Process(
+        target=_download_worker_entrypoint,
+        args=(url, output_dir, max_filesize_bytes, format_kind_value, result_queue, progress_queue),
+    )
+    process.start()
+
+    try:
+        _wait_and_drain_progress(process, progress_queue, progress_sink, timeout_seconds)
+    finally:
+        if progress_sink is not None:
+            progress_sink(None)
 
     if result_queue.empty():
         raise _DownloadProcessError(
@@ -422,6 +605,36 @@ def _run_download_in_process(
     if status == "error":
         raise _DownloadProcessError(payload)
     return payload
+
+
+async def _drain_bridge(
+    bridge: asyncio.Queue[dict[str, Any] | None], progress_callback: ProgressCallback
+) -> None:
+    """Runs entirely on the event loop (an asyncio.Task) — the only thing
+    that ever touches `progress_callback` directly. `bridge` is fed
+    exclusively via `loop.call_soon_threadsafe(bridge.put_nowait, raw)`
+    from the executor thread (see download()), so this side is plain
+    single-threaded async code: no locks, no thread-safety concerns,
+    trivially unit-testable by just putting items on a real asyncio.Queue.
+
+    Stops on `None`. Day 11B originally had `download()` push a stop
+    sentinel itself right after `run_in_executor` returned — that's
+    WRONG and was caught by a flaky test: `download()` resuming (via the
+    executor future's own completion callback) is a SEPARATE scheduling
+    path from `progress_sink`'s `call_soon_threadsafe` calls, and nothing
+    guarantees the latter has already landed in `bridge` by the time the
+    former fires — under load the stop signal could overtake the very
+    last real item. The fix: the STOP marker travels through the exact
+    same channel (`progress_sink`, called from the SAME executor thread,
+    in `_run_download_in_process`'s `finally`) as every real item, so
+    plain same-thread `call_soon_threadsafe` submission order — which
+    IS guaranteed — keeps it correctly last.
+    """
+    while True:
+        raw = await bridge.get()
+        if raw is None:
+            return
+        await progress_callback(_build_download_progress(raw))
 
 
 class YtDlpDownloader:
@@ -450,9 +663,32 @@ class YtDlpDownloader:
             media_type=_guess_media_type(info),
         )
 
-    async def download(self, url: str, options: DownloadOptions) -> Path:
+    async def download(
+        self,
+        url: str,
+        options: DownloadOptions,
+        progress_callback: ProgressCallback | None = None,
+    ) -> Path:
         loop = asyncio.get_running_loop()
         options.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Day 11B: see the module docstring for the two-hop bridge this
+        # sets up. `bridge`/`drain_task` only exist when the caller
+        # actually wants progress — no cost for callers that don't pass
+        # progress_callback (e.g. get_preview's callers, or any test that
+        # doesn't care about progress).
+        bridge: asyncio.Queue[dict[str, Any] | None] | None = None
+        progress_sink: Callable[[dict[str, Any] | None], None] | None = None
+        drain_task: asyncio.Task[None] | None = None
+        if progress_callback is not None:
+            bridge = asyncio.Queue()
+            _bridge = bridge  # local alias so mypy narrows it as non-Optional in the closure
+
+            def _sink(raw: dict[str, Any] | None) -> None:
+                loop.call_soon_threadsafe(_bridge.put_nowait, raw)
+
+            progress_sink = _sink
+            drain_task = asyncio.create_task(_drain_bridge(bridge, progress_callback))
 
         try:
             result_path_str = await loop.run_in_executor(
@@ -463,6 +699,7 @@ class YtDlpDownloader:
                 options.max_filesize_bytes,
                 options.timeout_seconds,
                 options.format_kind.value,
+                progress_sink,
             )
         except _DownloadTimeoutError as exc:
             logger.warning("download_failed", url=url, error=str(exc), reason="timeout")
@@ -488,6 +725,15 @@ class YtDlpDownloader:
             # that belongs in the log, not in a message sent to the user.
             logger.warning("download_failed", url=url, error=str(exc), reason="process_error")
             raise ExtractionError from exc
+        finally:
+            # `_run_download_in_process` itself sends the None stop
+            # marker (via progress_sink, from the executor thread — see
+            # _drain_bridge's docstring for why it must be that thread
+            # and not here) before returning, so by the time
+            # run_in_executor's await above resolves, drain_task is
+            # already guaranteed to run to completion on its own.
+            if drain_task is not None:
+                await drain_task
 
         logger.info("download_succeeded", url=url, path=result_path_str)
         return Path(result_path_str)

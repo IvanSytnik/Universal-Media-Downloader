@@ -23,6 +23,18 @@ from src.domain.value_objects.download_options import DownloadOptions
 from src.domain.value_objects.enums import DownloadStatus
 from tests.conftest import FakeErrorLocalizer
 
+_CHAT_ID = 777
+_MESSAGE_ID = 888
+
+
+class FakeProgressPublisher:
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    async def publish(self, request_id, chat_id, message_id, language, progress) -> None:
+        self.calls.append((request_id, chat_id, message_id, language, progress))
+
+
 _MAX_BYTES = 50 * 1024 * 1024
 _TIMEOUT = 1800
 
@@ -70,7 +82,9 @@ class FakeDownloader:
     async def get_preview(self, url: str):  # noqa: ANN201 — not exercised in these tests
         raise NotImplementedError
 
-    async def download(self, url: str, options: DownloadOptions) -> Path:
+    async def download(
+        self, url: str, options: DownloadOptions, progress_callback=None
+    ) -> Path:
         if self._error is not None:
             raise self._error
         assert self._result_path is not None
@@ -108,7 +122,9 @@ def _make_request_and_user() -> tuple[DownloadRequest, User]:
     return request, user
 
 
-def _use_case(request_repo, user_repo, downloader, notifier, localizer) -> ProcessDownloadUseCase:
+def _use_case(
+    request_repo, user_repo, downloader, notifier, localizer, progress_publisher=None
+) -> ProcessDownloadUseCase:
     return ProcessDownloadUseCase(
         download_request_repository=request_repo,
         user_repository=user_repo,
@@ -116,6 +132,7 @@ def _use_case(request_repo, user_repo, downloader, notifier, localizer) -> Proce
         storage=FakeStorage(),
         notifier=notifier,
         error_localizer=localizer,
+        progress_publisher=progress_publisher or FakeProgressPublisher(),
         max_deliverable_file_size_bytes=_MAX_BYTES,
         download_timeout_seconds=_TIMEOUT,
     )
@@ -135,7 +152,7 @@ async def test_successful_download_marks_done_and_sends_file(i18n_core) -> None:
         notifier,
         FakeErrorLocalizer(i18n_core),
     )
-    await use_case.execute(request.id)
+    await use_case.execute(request.id, _CHAT_ID, _MESSAGE_ID)
 
     assert request.status == DownloadStatus.DONE
     assert request_repo.updates == [DownloadStatus.PROCESSING, DownloadStatus.DONE]
@@ -156,7 +173,7 @@ async def test_download_failure_marks_failed_and_notifies_text(i18n_core) -> Non
         notifier,
         localizer,
     )
-    await use_case.execute(request.id)
+    await use_case.execute(request.id, _CHAT_ID, _MESSAGE_ID)
 
     assert request.status == DownloadStatus.FAILED
     assert request_repo.updates == [DownloadStatus.PROCESSING, DownloadStatus.FAILED]
@@ -181,7 +198,7 @@ async def test_delivery_failure_marks_failed_and_notifies_text(i18n_core) -> Non
         notifier,
         FakeErrorLocalizer(i18n_core),
     )
-    await use_case.execute(request.id)
+    await use_case.execute(request.id, _CHAT_ID, _MESSAGE_ID)
 
     assert request.status == DownloadStatus.FAILED
     assert len(notifier.sent_texts) == 1
@@ -202,7 +219,7 @@ async def test_unknown_request_id_is_a_noop(i18n_core) -> None:
 
     from uuid import uuid4
 
-    await use_case.execute(uuid4())
+    await use_case.execute(uuid4(), _CHAT_ID, _MESSAGE_ID)
 
     assert request_repo.updates == []
     assert notifier.sent_files == []

@@ -1,4 +1,4 @@
-## Universal Media Downloader — English locale (Day 9, extended Day 10, Day 11A)
+## Universal Media Downloader — English locale (Day 9, extended Day 10, Day 11A, Day 11B)
 ## Same keys as ru/messages.ftl. Missing a key here is a hard error
 ## (raise_key_error=True), so both locales stay structurally in sync.
 
@@ -97,6 +97,19 @@ error-timeout = The download took too long and was aborted. Please try again.
 error-too-large = This video is too large for Telegram (~{ $estimated_mb } MB, limit { $limit_mb } MB).
 # Delivery (downloaded but couldn't send) — worker path.
 error-delivery-failed = I downloaded the video but couldn't send it to Telegram. Please try again later.
+
+# --- Download progress (Day 11B) ---
+# Rendered OUTSIDE an update context (long-lived listener in the bot
+# process, see progress_listener.py) — explicit locale only (bug #10).
+# $percent — an integer (0-100).
+progress-downloading = ⏳ Downloading… { $percent }%
+# For streams with no known total_bytes (percent = None): $mb is a
+# number, $speed is an already-formatted string like "1.2 MB/s" (same
+# pattern as $platforms in help-text).
+progress-downloading-nostream = ⏳ Downloaded { $mb } MB ({ $speed })
+# Day 11B.1 — the download→postprocess boundary, audio path (mp3) only.
+# No percentage: transcode-itself progress is out of scope.
+progress-converting = ⏳ Converting to MP3…
 
 # --- /download ---
 download-usage = Usage: /download link

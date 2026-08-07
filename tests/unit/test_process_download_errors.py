@@ -21,6 +21,7 @@ from src.domain.exceptions import (
     PrivateContentError,
     UnsupportedURLError,
 )
+from src.domain.value_objects.format_kind import FormatKind
 from src.infrastructure.localization.fluent_error_localizer import FluentErrorLocalizer
 from src.presentation.telegram.i18n import DEFAULT_LOCALE, create_i18n_core
 
@@ -31,6 +32,12 @@ class _Request:
         self.user_id = user_id
         self.source_url = "https://example.com/x"
         self.status = "pending"
+        # Day 11A leftover bug: this fake was never given format_kind
+        # after ProcessDownloadUseCase started reading request.format_kind
+        # (11A.1 hotfix) — DownloadOptions construction blew up with
+        # AttributeError. Fixed here as part of Day 11B (touches this
+        # use case's execute() signature anyway).
+        self.format_kind = FormatKind.VIDEO
 
     def mark_processing(self) -> None:
         self.status = "processing"
@@ -75,7 +82,7 @@ class _FailingDownloader:
     def __init__(self, exc: Exception) -> None:
         self._exc = exc
 
-    async def download(self, url: str, options: object) -> Path:
+    async def download(self, url: str, options: object, progress_callback=None) -> Path:
         raise self._exc
 
     async def get_preview(self, url: str) -> object:  # pragma: no cover
@@ -98,9 +105,14 @@ class _CapturingNotifier:
         self, telegram_id: int, file_path: Path, caption: str | None = None
     ) -> None:
         raise AssertionError("should not be called on a download failure")
-    
+
     async def send_text(self, telegram_id: int, text: str) -> None:
         self.texts.append(text)
+
+
+class _NoopProgressPublisher:
+    async def publish(self, request_id, chat_id, message_id, language, progress) -> None:
+        pass
 
 
 @pytest.fixture
@@ -121,10 +133,11 @@ async def _run(exc: Exception, language: str | None, localizer: FluentErrorLocal
         storage=_Storage(),
         notifier=notifier,
         error_localizer=localizer,
+        progress_publisher=_NoopProgressPublisher(),
         max_deliverable_file_size_bytes=2000 * 1024 * 1024,
         download_timeout_seconds=1800,
     )
-    await use_case.execute(request.id)
+    await use_case.execute(request.id, chat_id=777, message_id=888)
     assert request.status == "failed"
     assert len(notifier.texts) == 1
     return notifier.texts[0]

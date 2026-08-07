@@ -24,6 +24,15 @@ persisted correctly in 11A but this last read-side link was missing, so
 downloaded video even when the user tapped MP3. This is the ONE line
 that closes the loop between "what the user asked for" (in the DB) and
 "what yt-dlp actually fetches".
+
+Day 11B — real-time progress. ``execute`` now takes ``chat_id`` and
+``message_id`` (the coordinates of the message to edit with progress —
+a transport detail, threaded through the job payload, never persisted;
+contrast with ``format_kind`` above). It builds a ``progress_callback``
+closing over the already-loaded ``request``/``user`` and hands it to
+``downloader.download(...)``; the callback's only job is to forward each
+``DownloadProgress`` to ``ProgressPublisherPort.publish`` with the
+routing/locale extras attached. No new DB reads on the progress path.
 """
 
 from __future__ import annotations
@@ -41,9 +50,11 @@ from src.domain.interfaces.download_request_repository import DownloadRequestRep
 from src.domain.interfaces.downloader import DownloaderPort
 from src.domain.interfaces.error_localizer import ErrorLocalizerPort
 from src.domain.interfaces.notifier import NotifierPort
+from src.domain.interfaces.progress_publisher import ProgressPublisherPort
 from src.domain.interfaces.storage import StoragePort
 from src.domain.interfaces.user_repository import UserRepository
 from src.domain.value_objects.download_options import DownloadOptions
+from src.domain.value_objects.download_progress import DownloadProgress
 from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -58,6 +69,7 @@ class ProcessDownloadUseCase:
         storage: StoragePort,
         notifier: NotifierPort,
         error_localizer: ErrorLocalizerPort,
+        progress_publisher: ProgressPublisherPort,
         max_deliverable_file_size_bytes: int,
         download_timeout_seconds: int,
     ) -> None:
@@ -75,6 +87,9 @@ class ProcessDownloadUseCase:
         ``error_key`` into a message in the user's language — see the
         module docstring for why the worker can't use aiogram-i18n
         directly.
+
+        `progress_publisher` (Day 11B) broadcasts progress snapshots
+        during the download; see the module docstring.
         """
         self._download_request_repository = download_request_repository
         self._user_repository = user_repository
@@ -82,6 +97,7 @@ class ProcessDownloadUseCase:
         self._storage = storage
         self._notifier = notifier
         self._error_localizer = error_localizer
+        self._progress_publisher = progress_publisher
         self._max_deliverable_file_size_bytes = max_deliverable_file_size_bytes
         self._download_timeout_seconds = download_timeout_seconds
 
@@ -104,7 +120,7 @@ class ProcessDownloadUseCase:
             )
         return self._error_localizer.localize(error_key, locale)
 
-    async def execute(self, request_id: UUID) -> None:
+    async def execute(self, request_id: UUID, chat_id: int, message_id: int) -> None:
         request = await self._download_request_repository.get_by_id(request_id)
         if request is None:
             logger.warning("process_download_request_not_found", request_id=str(request_id))
@@ -129,8 +145,18 @@ class ProcessDownloadUseCase:
             format_kind=request.format_kind,
         )
 
+        async def _on_progress(progress: DownloadProgress) -> None:
+            # Closes over the already-loaded request/user — no extra DB
+            # read per progress event (request.id is stable; user.language
+            # was already fetched above for the failure path too).
+            await self._progress_publisher.publish(
+                request.id, chat_id, message_id, user.language, progress
+            )
+
         try:
-            file_path = await self._downloader.download(request.source_url, options)
+            file_path = await self._downloader.download(
+                request.source_url, options, progress_callback=_on_progress
+            )
         except (ExtractionError, UnsupportedURLError) as exc:
             logger.warning(
                 "process_download_failed",

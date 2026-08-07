@@ -39,9 +39,11 @@ class _FakeRequestRepo:
 class _FakeQueue:
     def __init__(self) -> None:
         self.enqueued: UUID | None = None
+        self.enqueued_coordinates: tuple[int, int] | None = None
 
-    async def enqueue_download(self, request_id: UUID) -> str:
+    async def enqueue_download(self, request_id: UUID, chat_id: int, message_id: int) -> str:
         self.enqueued = request_id
+        self.enqueued_coordinates = (chat_id, message_id)
         return "job-1"
 
 
@@ -55,7 +57,9 @@ async def test_defaults_to_video() -> None:
     queue = _FakeQueue()
     use_case = RequestDownloadUseCase(_FakeUserRepo(_make_user()), repo, queue)
 
-    request = await use_case.execute(42, "https://youtube.com/watch?v=x")
+    request = await use_case.execute(
+        42, "https://youtube.com/watch?v=x", chat_id=1, message_id=2
+    )
 
     assert request.format_kind is FormatKind.VIDEO
     assert repo.created is not None
@@ -70,7 +74,7 @@ async def test_explicit_audio_persisted() -> None:
     use_case = RequestDownloadUseCase(_FakeUserRepo(_make_user()), repo, queue)
 
     request = await use_case.execute(
-        42, "https://youtube.com/watch?v=x", FormatKind.AUDIO
+        42, "https://youtube.com/watch?v=x", FormatKind.AUDIO, chat_id=1, message_id=2
     )
 
     assert request.format_kind is FormatKind.AUDIO

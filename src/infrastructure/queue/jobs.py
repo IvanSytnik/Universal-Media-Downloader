@@ -6,6 +6,10 @@ ProcessDownloadUseCase using dependencies stashed in `ctx` at worker
 startup (see worker_settings.py) — a fresh DB session per job, but a
 shared downloader/storage/notifier/error_localizer across the worker's
 lifetime.
+
+Day 11B: `download_job` gains `chat_id`/`message_id` — the coordinates
+of the message to edit with progress, threaded in from
+RequestDownloadUseCase's enqueue call (see TaskQueue docstring).
 """
 
 from __future__ import annotations
@@ -39,7 +43,7 @@ async def ping_job(ctx: dict[str, Any], message: str) -> dict[str, str]:
     return result
 
 
-async def download_job(ctx: dict[str, Any], request_id: str) -> None:
+async def download_job(ctx: dict[str, Any], request_id: str, chat_id: int, message_id: int) -> None:
     session_factory = ctx["session_factory"]
 
     async with session_scope(session_factory) as session:
@@ -50,10 +54,11 @@ async def download_job(ctx: dict[str, Any], request_id: str) -> None:
             storage=ctx["storage"],
             notifier=ctx["notifier"],
             error_localizer=ctx["error_localizer"],
+            progress_publisher=ctx["progress_publisher"],
             max_deliverable_file_size_bytes=ctx["max_deliverable_file_size_bytes"],
             download_timeout_seconds=ctx["download_timeout_seconds"],
         )
-        await use_case.execute(UUID(request_id))
+        await use_case.execute(UUID(request_id), chat_id, message_id)
 
 
 async def cleanup_expired_downloads_job(ctx: dict[str, Any]) -> None:
