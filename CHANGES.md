@@ -1,128 +1,131 @@
-# Day 11A — Выбор формата: видео / mp3
+# Day 11B — Прогресс скачивания в реальном времени + статус конвертации
 
-Инкрементальный патч. Распаковать `unzip -o` поверх корня проекта.
+Прямые правки в рабочей копии (Claude Code), не zip-патч. `git diff` — источник
+истины для ревью.
 
 ## Что сделано
 
-Под превью теперь **две кнопки подтверждения** вместо одной: «⬇️ Видео» и
-«🎵 MP3». Пользователь выбирает, что скачать — исходное видео или только
-аудиодорожку, извлечённую в mp3 (транскод системным ffmpeg). Выбор
-доезжает до воркера через БД (поле запроса), а не через payload очереди —
-воркер, как и раньше, восстанавливает весь запрос из базы по id.
+**Day 11B (база).** Реальный прогресс скачивания вместо статичного «⏳
+Скачивание начато…»: превью-сообщение теперь редактируется по ходу
+скачивания («⏳ Скачиваю… 42%» / «⏳ Скачано 12.3 МБ (1.1 МБ/с)» для потоков
+без известного размера), с троттлингом (не чаще раз в 3с И шаг ≥5%).
 
-Это первая половина Day 11. Вторая (11B) — прогресс скачивания в
-реальном времени — отдельным патчем, т.к. трогает рантайм-инициализацию
-(worker/bot startup) и требует live-прогона.
+**Day 11B.1 (этот патч поверх базы, до коммита).** Live-прогон 11B на
+реальном mp3-скачивании выявил: пользователь видит «Скачиваю… 100%»
+неподвижно ~4-5 минут, пока идёт ffmpeg-транскод (`FFmpegExtractAudio`)
+после самого скачивания — выглядит как зависание. Добавлен статус
+**«⏳ Конвертирую в MP3…»**, показываемый на границе download→postprocess,
+только для audio-пути.
 
-## Архитектурное решение (зафиксировано до кода)
+Отдельная находка того же live-прогона: audio-путь скачивает ~1.03 GiB
+(полный muxed video+audio поток, формат `18`/360p), а не отдельную
+audio-only дорожку (~50-440 МБ в зависимости от длины видео) — несмотря на
+корректный селектор `bestaudio/best`. Диагностировано через `yt-dlp -F` с
+точными extractor-args воркера: `player_client=["android","web"]` не
+получает audio-only форматы для тестового видео (YouTube отдаёт только
+`18` при этом наборе клиентов; `android_vr,web` показывает и audio-only
+139/249/140/251, и не более высокое видео-качество — `18` остаётся
+единственным combined-форматом даже там). **Сознательно НЕ фиксится в этом
+патче** — отдельный день с продуктовым обсуждением, см. HANDOFF → Day 11C.
 
-**`format_kind` — свойство запроса, живёт в домене и в БД.** Это то,
-ЧТО качать — атрибут `DownloadRequest`, а не деталь транспорта. Поэтому:
-поле сущности → колонка → миграция → маппинг в репозитории. Контраст с
-11B, где координаты «⏳»-сообщения (КУДА рисовать прогресс) — деталь
-доставки и поедут в payload задачи, не в домене. Разделение по
-Dependency Rule (PROJECT_SPEC §6.1): Telegram-специфика не течёт в домен.
+## Архитектурное решение: сигнал границы фаз — тот же канал, не новый
 
-**Аудио = mp3 через `FFmpegExtractAudio`.** Предсказуемый универсальный
-контейнер, ffmpeg уже обязателен (PROJECT_SPEC §2). Финальное имя файла —
-по-прежнему из `post_hooks` (баг №4): постпроцессор меняет расширение на
-.mp3, post_hooks отдаёт реальный путь после транскода — предсказание не
-нужно, mp3-путь покрыт тем же механизмом, что и video-мёрж.
+yt-dlp сам эмитит событие `status == "finished"` в `progress_hooks` на
+границе download→postprocess — оно и раньше долетало до
+`_record_progress`, но откидывалось (`_download_worker_entrypoint`,
+Day 11B). Day 11B.1 просто перестаёт его откидывать для audio-пути:
+эмитит bare-маркер `{"phase": ProgressPhase.CONVERTING}` через ТОТ ЖЕ
+`progress_queue` → asyncio-bridge → `progress_callback` путь, что и
+обычные проценты — второй канал не понадобился. Video-путь маркер не
+эмитит: там нет ffmpeg-транскода, лишний статус не нужен.
+
+`ProgressPhase` — маленький `StrEnum` (`DOWNLOADING`/`CONVERTING`) по
+прецеденту `FormatKind`: неизвестное/отсутствующее значение → безопасный
+дефолт, вместо magic-строк в трёх местах (VO, downloader, listener).
+Ключевое для устойчивости: `DownloadProgress.phase` — поле с дефолтом
+(`ProgressPhase.DOWNLOADING`), так что все существующие конструкторы VO
+не сломались; `TelegramProgressListener` читает `payload.get("phase",
+...)`, никогда `payload["phase"]` — иначе старое событие без `phase` в
+потоке (rolling deploy) уронит долгоживущий listener на `KeyError`. На
+границе Redis (JSON) `StrEnum` сериализуется как обычная строка
+автоматически — паблишеру не нужно вручную звать `.value`; а listener
+после `json.loads` НЕ конструирует `ProgressPhase(...)` из данных
+пришедших по pubsub (это `ValueError` на незнакомом значении от более
+новой версии продюсера) — только сравнение на равенство.
+
+Статус «Конвертирую» — одноразовое событие границы фаз, а не точка в
+потоке процентов, поэтому **обходит троттлинг** listener'а целиком
+(`_handle_message` пропускает `should_emit` для `phase == CONVERTING`).
 
 ## Новые файлы
 
-- `src/domain/value_objects/format_kind.py` — `FormatKind` (VIDEO/AUDIO).
-  Отдельно от `MediaType`: `MediaType` — чем ЯВЛЯЕТСЯ источник, `FormatKind`
-  — что ЗАПРОСИЛ пользователь. Одно видео можно скачать и как video, и как
-  mp3 — это разные намерения, значит разные концепты.
-- `infra/alembic/versions/0003_download_request_format_kind.py` — колонка
-  `download_requests.format_kind` String(20), NOT NULL, server_default
-  `'video'` (существующие строки backfill'ятся в video без отдельного
-  data-шага — как вводился media_type). **Проверь `down_revision`:**
-  указан `"0002_user_language"` — если фактический revision id в твоём
-  0002-файле другой, поправь одну строку.
-- `tests/unit/test_confirm_callback.py` — encode/decode callback, legacy
-  bare-форма, неизвестный код → video, бюджет 64 байта, сохранение
-  префикса `dl:` для роутера.
-- `tests/unit/test_download_ydl_opts.py` — video/audio ветки ydl_opts,
-  инвариант «общие опции надёжности идентичны в обоих форматах»,
-  max_filesize backstop.
-- `tests/unit/test_request_download_format.py` — проброс format_kind в
-  use case (дефолт video / явный audio), дефолт на уровне сущности.
-- `tests/unit/test_ytdlp_downloader.py` — **починка тестового долга.**
-  `_run_download_in_process` получил 5-й позиционный аргумент
-  (`format_kind_value`), а 4 существующих теста мокали её сигнатурой на
-  4 аргумента → `TypeError: takes 4 positional arguments but 5 were
-  given`. Четыре мока (1 lambda + 3 def) обновлены: принимают
-  `format_kind_value` и игнорируют его. Логика/ассерты не тронуты —
-  тесты проверяют маппинг исключений `download()`, который от формата не
-  зависит. Файл включён в патч целиком, чтобы zip был самодостаточным.
+- `src/domain/interfaces/progress_publisher.py` — `ProgressPublisherPort`.
+- `src/domain/value_objects/download_progress.py` — `DownloadProgress`
+  (частично из Day 11B; `+ phase: ProgressPhase = DOWNLOADING` в 11B.1).
+- `src/domain/value_objects/progress_phase.py` — **новое в 11B.1**:
+  `ProgressPhase(StrEnum)` — `DOWNLOADING` / `CONVERTING`.
+- `src/infrastructure/progress/redis_progress_publisher.py` —
+  `RedisProgressPublisher`: один JSON-payload на `umd:progress:<request_id>`
+  (percent/bytes/speed/eta/phase + chat_id/message_id/language).
+- `src/presentation/telegram/progress_listener.py` —
+  `TelegramProgressListener` (долгоживущий PSUBSCRIBE-слушатель в
+  bot-процессе) + `ProgressThrottler` (чистая debounce-логика).
 
 ## Изменённые файлы
 
-- `src/domain/value_objects/download_options.py` — `+ format_kind:
-  FormatKind = VIDEO` (opt-in, обратная совместимость).
-- `src/domain/entities/download_request.py` — `+ format_kind` поле и
-  аргумент `create(..., format_kind=VIDEO)`.
-- `src/infrastructure/database/models.py` — колонка `format_kind`
-  (server_default "video").
-- `src/infrastructure/database/repositories/download_request_repository.py`
-  — маппинг `format_kind` в `_to_entity` и `create`. В `update` НЕ
-  трогается: формат неизменяем после создания.
-- `src/application/use_cases/request_download.py` — `execute(telegram_id,
-  url, format_kind=VIDEO)`; кладёт формат в сущность.
-- `src/infrastructure/downloader/ytdlp_downloader.py` — новый
-  `_build_download_ydl_opts(...)` (единая сборка opts, format-специфичные
-  ключи слоями поверх общих); `format_kind` проброшен через
-  `download → _run_download_in_process → _download_worker_entrypoint` как
-  строковое значение (spawn/pickle-безопасно) и реконструирован в enum в
-  child. Video-ветка байт-в-байт прежняя.
-- `src/presentation/telegram/keyboards.py` — `preview_confirm_keyboard`
-  рисует две кнопки формата + отмену; `confirm_callback_data(token, fmt)`
-  и `parse_confirm_callback(data)` — encode/decode с суффиксом формата
-  (`dl:<token>:v|a`), терпит legacy `dl:<token>`.
-- `src/presentation/telegram/handlers/download_flow.py` —
-  `handle_confirm_download` парсит формат из callback, передаёт в use
-  case; лог `format_kind`. Роутер по-прежнему `startswith("dl:")` —
-  ловит обе кнопки.
-- `locales/{ru,en}/messages.ftl` — `+ btn-confirm-video`,
-  `+ btn-confirm-audio`; `help-text` шаг 3 обновлён под две кнопки.
-  `btn-confirm` оставлен (на случай ссылок), локали структурно синхронны.
+- `src/infrastructure/downloader/ytdlp_downloader.py` — новая
+  `_translate_progress_status(status, format_kind) -> dict | None`:
+  чистая функция, вынесенная из `_record_progress` специально ради
+  юнит-тестируемости без реального дочернего процесса (Day 11B.1);
+  `_build_download_progress` — ветка для `{"phase": CONVERTING}` (пустой
+  снапшот, никаких byte-полей).
+- `src/application/use_cases/process_download.py` — без изменений в
+  11B.1: `_on_progress` уже прозрачно форвардит любой `DownloadProgress`
+  (включая converting-снапшоты) в `ProgressPublisherPort.publish`.
+- `locales/{ru,en}/messages.ftl` — `+ progress-converting`
+  («⏳ Конвертирую в MP3…» / «⏳ Converting to MP3…»).
+- `tests/unit/test_i18n.py` — **починка обнаруженного долга**:
+  `progress-downloading`/`progress-downloading-nostream` (Day 11B) не были
+  добавлены в CI-гвард `_REQUIRED_KEYS_SIMPLE`/`test_parametrized_keys_resolve`
+  вопреки заявлению в TASK_Day11B.md, что «существующий тест синхронности
+  подхватит» — не подхватывал. Добавлены все три `progress-*` ключа.
 
-## Проверено (в песочнице Claude, Python 3.12)
+## Квалити-гейт
 
-- `parse_confirm_callback` / `confirm_callback_data`: roundtrip
-  video+audio, legacy bare-форма → video, неизвестный код → video,
-  callback 37 байт (лимит 64), префикс `dl:` сохранён.
-- `_build_download_ydl_opts`: video = `best[ext=mp4]/best` + mp4-merge,
-  audio = `bestaudio/best` + FFmpegExtractAudio mp3; общие опции
-  надёжности идентичны; max_filesize backstop на обоих путях.
-- Проброс format_kind через `RequestDownloadUseCase` (дефолт video /
-  явный audio), дефолт на уровне сущности.
-- Починенный `test_ytdlp_downloader.py`: 4 ранее падавших теста
-  (`TypeError` от нового 5-го аргумента) зелёные, 7 прежних не задеты.
-- 25 тестов зелёные (14 новых + 11 в починенном ytdlp_downloader);
-  `ruff check` чисто; все файлы патча компилируются.
+`python -m pytest` (235/235), `python -m ruff check .`, `python -m mypy
+--strict src` — все зелёные.
 
-## ⚠️ Прогнать локально перед коммитом (среда 3.13)
+## Live-прогон (урок 9.1 — патч трогает worker + bot startup)
 
-1. **Полный `pytest`** — на реальном коде (3.13) должен быть полностью
-   зелёным: первый прогон 11A дал 4 падения в `test_ytdlp_downloader.py`
-   (`TypeError` от нового 5-го аргумента `_run_download_in_process`) —
-   **исправлено в этом же патче** (см. выше), теперь 195/195 ожидаемо
-   зелёные. В песочнице Claude — 3.12 + faithful-стабы части closure, на
-   реальном коде прогнать весь набор для подтверждения.
-2. **`mypy --strict src`** — в песочнице не гонялся (нет полного
-   окружения типов). Ожидаемо чисто: новые сигнатуры полностью
-   типизированы, `FormatKind` — StrEnum.
-3. **Миграция:** `alembic upgrade head` на чистой БД и поверх
-   существующей (проверить backfill server_default). Сверить
-   `down_revision` с фактическим revision id файла 0002.
-4. Быстрый живой прогон: превью → «🎵 MP3» → приходит mp3; превью →
-   «⬇️ Видео» → приходит mp4 (регресс video-пути).
+`docker compose build bot worker && docker compose up -d bot worker` —
+оба контейнера стартуют без крашей на новом коде. Реальные скачивания
+через `@Downloader_Media_U_bot`:
 
-## Не входит в 11A (следующий патч 11B)
+- **video**: «⏳ Скачиваю… N%» до 100% → файл; статус «Конвертирую» НЕ
+  появляется (video не эмитит маркер).
+- **mp3**: «⏳ Скачиваю… 100%» → на границе download→transcode сменяется
+  на «⏳ Конвертирую в MP3…» (подтверждено визуально пользователем) → mp3
+  доезжает. `download_succeeded` для audio-запроса — с расширением
+  `.mp3` (FFmpegExtractAudio + post_hooks, баг №4 не нарушен).
 
-Прогресс скачивания в реальном времени (progress_hooks → mp-очередь →
-Redis pub/sub → editMessageText с троттлингом). Трогает startup —
-обязателен live-прогон (урок 9.1).
+Логи подтверждают чистый проход обоих запросов (`process_download_succeeded`
+×2, ноль `progress_listener_*`-warning'ов, ноль трейсбеков).
+
+## ⚠️ Перед деплоем
+
+Патч расширяет `download_job` (обязательные `chat_id`/`message_id` в
+payload) и переносит слушателя прогресса в bot-процесс. **Осушить
+(drain) очередь arq перед выкладкой**: любая уже поставленная задача со
+старым payload (без `chat_id`/`message_id`) несовместима с новым
+`download_job` и упадёт при разборе аргументов. Штатный способ — не
+принимать новые `/download` некоторое время, дождаться опустошения
+очереди (проверить, что in-flight задачи из старого деплоя добежали до
+конца — например по логам worker'а или по отсутствию активных job'ов),
+затем раскатывать новый образ.
+
+## Не входит в 11B/11B.1 (Day 11C — согласовано, не начато)
+
+Качество формата видео (сейчас всегда 360p, `format 18`) и audio-only
+скачивание вместо полного muxed-потока — отдельный день с продуктовым
+обсуждением (качество по умолчанию, выбор пользователем, лимит размера
+vs 1080p). Подробности — HANDOFF.md → «Day 11C».

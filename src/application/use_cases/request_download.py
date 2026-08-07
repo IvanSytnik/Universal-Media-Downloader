@@ -12,6 +12,13 @@ Day 11A: takes ``format_kind`` (video vs mp3). It defaults to
 about audio keeps working unchanged; the guided-flow preview buttons
 pass AUDIO explicitly when the user taps "MP3". The value is persisted on
 the request (not enqueued) — the worker reads it back from the DB.
+
+Day 11B: takes required, keyword-only ``chat_id``/``message_id`` — the
+coordinates of the message the worker should edit with progress. No
+default on purpose: unlike ``format_kind`` (which has a sane default,
+VIDEO), there's no sane default "where to render progress" — a caller
+that hasn't thought about it should fail loudly at the call site, not
+silently enqueue a download nobody can see progress for.
 """
 
 from __future__ import annotations
@@ -41,6 +48,9 @@ class RequestDownloadUseCase:
         telegram_id: int,
         url: str,
         format_kind: FormatKind = FormatKind.VIDEO,
+        *,
+        chat_id: int,
+        message_id: int,
     ) -> DownloadRequest:
         validated_url = validate_url(url)
 
@@ -58,6 +68,6 @@ class RequestDownloadUseCase:
             format_kind=format_kind,
         )
         await self._download_request_repository.create(request)
-        await self._task_queue.enqueue_download(request.id)
+        await self._task_queue.enqueue_download(request.id, chat_id, message_id)
 
         return request

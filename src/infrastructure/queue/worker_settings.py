@@ -14,6 +14,10 @@ resolves keys with an EXPLICIT locale (mandatory outside an update
 context — HANDOFF bug #10/#11). ``create_i18n_core().startup()`` is a
 COROUTINE and must be awaited before the core is used — done here at
 worker startup, mirroring main.py.
+
+Day 11B adds a ``progress_publisher`` to ``ctx``, backed by the worker's
+own arq-provided Redis connection (``ctx["redis"]``) — no extra
+connection to open or close at shutdown.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ from src.infrastructure.database.engine import create_engine, create_session_fac
 from src.infrastructure.downloader.ytdlp_downloader import YtDlpDownloader
 from src.infrastructure.localization.fluent_error_localizer import FluentErrorLocalizer
 from src.infrastructure.notifier.telegram_notifier import TelegramNotifier
+from src.infrastructure.progress.redis_progress_publisher import RedisProgressPublisher
 from src.infrastructure.queue.jobs import cleanup_expired_downloads_job, download_job, ping_job
 from src.infrastructure.storage.local_storage import LocalFileStorage
 from src.infrastructure.telegram.bot_factory import create_telegram_bot
@@ -65,6 +70,10 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["storage"] = LocalFileStorage(base_dir=DOWNLOAD_STORAGE_DIR)
     ctx["max_deliverable_file_size_bytes"] = settings.max_deliverable_file_size_bytes
     ctx["download_timeout_seconds"] = settings.download_timeout_seconds
+    # Day 11B: no dedicated connection — `ctx["redis"]` is arq's own
+    # ArqRedis, already alive for the worker's lifetime and PUBLISH-capable
+    # (it's a redis.asyncio.Redis subclass).
+    ctx["progress_publisher"] = RedisProgressPublisher(ctx["redis"])
 
     # i18n for the worker's failure messages. Build the same Fluent core
     # the Telegram side uses, start it (loads FTL — a COROUTINE, bug #11),

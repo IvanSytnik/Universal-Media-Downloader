@@ -37,6 +37,12 @@ Everything else is unchanged: URLs are stashed under a short token
 (callback_data can't hold a URL), the confirm button resolves the token
 and calls the same RequestDownloadUseCase /download uses, the Application
 layer contract is the same bar the new optional argument.
+
+Day 11B — real-time progress needs a concrete (chat_id, message_id) to
+edit, so ``handle_confirm_download`` now requires ``callback.message`` to
+be a real ``Message`` (not None/inaccessible) before enqueueing at all —
+those coordinates come straight from the preview card that's already on
+screen, no extra lookup.
 """
 
 from __future__ import annotations
@@ -254,6 +260,15 @@ async def handle_confirm_download(
         await callback.answer(i18n.get("flow-preview-stale"), show_alert=True)
         return
 
+    if not isinstance(callback.message, Message):
+        # Day 11B: progress needs a concrete (chat_id, message_id) to
+        # edit. An inaccessible/missing preview card means there's
+        # nowhere to render it — bail out rather than enqueueing a
+        # download with no target. Reuses the existing stale-preview
+        # copy; this is rare enough not to warrant a dedicated key.
+        await callback.answer(i18n.get("flow-preview-stale"), show_alert=True)
+        return
+
     verdict = await rate_limiter.acquire(
         key=f"download:{callback.from_user.id}",
         limit=settings.rate_limit_downloads_per_hour,
@@ -269,6 +284,8 @@ async def handle_confirm_download(
     await preview_store.delete(token)
 
     telegram_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+    message_id = callback.message.message_id
 
     async with session_scope(session_factory) as session:
         use_case = RequestDownloadUseCase(
@@ -277,7 +294,9 @@ async def handle_confirm_download(
             task_queue=ArqTaskQueue(arq_pool),
         )
         try:
-            request = await use_case.execute(telegram_id, url, format_kind)
+            request = await use_case.execute(
+                telegram_id, url, format_kind, chat_id=chat_id, message_id=message_id
+            )
         except UnsupportedURLError as exc:
             # Our validator again (RequestDownloadUseCase re-validates).
             await callback.answer(

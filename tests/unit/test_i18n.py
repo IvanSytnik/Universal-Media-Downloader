@@ -22,6 +22,9 @@ _REQUIRED_KEYS_SIMPLE = [
     "flow-download-started", "flow-cancelled", "flow-preview-stale",
     "error-unsupported-site", "download-usage", "download-started",
     "preview-usage", "health-ok", "worker-status-empty", "help-any-site",
+    # Day 11B / 11B.1 — these were missing from this guard list even
+    # though TASK_Day11B.md claimed it would "pick them up automatically".
+    "progress-converting",
 ]
 
 
@@ -49,6 +52,8 @@ async def test_parametrized_keys_resolve(core) -> None:
                         duration="1:00", mediatype="video")
         assert core.get("error-bad-url", locale, reason="x")
         assert core.get("worker-ping-enqueued", locale, jobid="abc")
+        assert core.get("progress-downloading", locale, percent=42)
+        assert core.get("progress-downloading-nostream", locale, mb=1.5, speed="1.0 MB/s")
 
 
 @pytest.mark.asyncio

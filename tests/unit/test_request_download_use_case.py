@@ -53,12 +53,14 @@ class FakeDownloadRequestRepository:
 class FakeTaskQueue:
     def __init__(self) -> None:
         self.enqueued_download_ids: list[UUID] = []
+        self.enqueued_coordinates: list[tuple[int, int]] = []
 
     async def enqueue_ping(self, message: str) -> str:
         return "fake-ping-job"
 
-    async def enqueue_download(self, request_id: UUID) -> str:
+    async def enqueue_download(self, request_id: UUID, chat_id: int, message_id: int) -> str:
         self.enqueued_download_ids.append(request_id)
+        self.enqueued_coordinates.append((chat_id, message_id))
         return "fake-download-job"
 
 
@@ -70,7 +72,9 @@ async def test_creates_request_for_existing_user() -> None:
     task_queue = FakeTaskQueue()
 
     use_case = RequestDownloadUseCase(user_repo, request_repo, task_queue)
-    request = await use_case.execute(telegram_id=42, url="https://example.com/video")
+    request = await use_case.execute(
+        telegram_id=42, url="https://example.com/video", chat_id=1, message_id=2
+    )
 
     assert request.user_id == existing_user.id
     assert request.source_url == "https://example.com/video"
@@ -85,7 +89,9 @@ async def test_registers_new_user_on_the_fly() -> None:
     task_queue = FakeTaskQueue()
 
     use_case = RequestDownloadUseCase(user_repo, request_repo, task_queue)
-    request = await use_case.execute(telegram_id=999, url="https://example.com/video")
+    request = await use_case.execute(
+        telegram_id=999, url="https://example.com/video", chat_id=1, message_id=2
+    )
 
     created_user = await user_repo.get_by_telegram_id(999)
     assert created_user is not None
@@ -101,7 +107,7 @@ async def test_rejects_malformed_url_before_touching_repo_or_queue() -> None:
     use_case = RequestDownloadUseCase(user_repo, request_repo, task_queue)
 
     with pytest.raises(UnsupportedURLError):
-        await use_case.execute(telegram_id=1, url="not-a-url")
+        await use_case.execute(telegram_id=1, url="not-a-url", chat_id=1, message_id=2)
 
     assert request_repo.created == []
     assert task_queue.enqueued_download_ids == []

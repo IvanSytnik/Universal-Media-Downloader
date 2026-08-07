@@ -23,8 +23,10 @@ class ArqTaskQueue:
             raise RuntimeError("Failed to enqueue ping job (duplicate job_id?)")
         return job.job_id
 
-    async def enqueue_download(self, request_id: UUID) -> str:
-        job = await self._pool.enqueue_job("download_job", str(request_id))
+    async def enqueue_download(self, request_id: UUID, chat_id: int, message_id: int) -> str:
+        job = await self._pool.enqueue_job(
+            "download_job", str(request_id), chat_id, message_id
+        )
         if job is None:
             raise RuntimeError("Failed to enqueue download job (duplicate job_id?)")
         return job.job_id

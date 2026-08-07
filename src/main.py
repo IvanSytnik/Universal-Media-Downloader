@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import BotCommand
@@ -26,6 +27,7 @@ from src.presentation.telegram.i18n import (
     create_i18n_core,
     create_i18n_middleware,
 )
+from src.presentation.telegram.progress_listener import TelegramProgressListener
 from src.shared.logging import configure_logging, get_logger
 
 # Menu-command FTL keys, localized per locale via set_my_commands scopes.
@@ -97,6 +99,19 @@ async def main() -> None:
         ]
     )
 
+    # Day 11B: long-lived umd:progress:* listener, same process/same bot
+    # (Option A, TASK_Day11B.md) — reuses redis_client (a pubsub()
+    # connection is a separate connection from the same pool, standard
+    # usage) and the already-started i18n_core for explicit-locale
+    # rendering (bug #10 — no I18nContext exists in this background task).
+    progress_listener = TelegramProgressListener(
+        bot=bot,
+        redis=redis_client,
+        i18n_core=i18n_core,
+        default_locale=DEFAULT_LOCALE,
+    )
+    listener_task = asyncio.create_task(progress_listener.run())
+
     try:
         await dp.start_polling(
             bot,
@@ -107,6 +122,9 @@ async def main() -> None:
             rate_limiter=rate_limiter,
         )
     finally:
+        listener_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await listener_task
         await arq_pool.close()
         await redis_client.aclose()
         await engine.dispose()
