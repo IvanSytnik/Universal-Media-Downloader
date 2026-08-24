@@ -25,6 +25,8 @@ _REQUIRED_KEYS_SIMPLE = [
     # Day 11B / 11B.1 — these were missing from this guard list even
     # though TASK_Day11B.md claimed it would "pick them up automatically".
     "progress-converting",
+    # Day 11C.1 — worker-path message for an unreadable DB row.
+    "error-internal",
 ]
 
 
