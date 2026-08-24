@@ -130,16 +130,22 @@ from src.domain.value_objects.enums import MediaType
 from src.domain.value_objects.format_kind import FormatKind
 from src.domain.value_objects.media_preview import MediaPreview
 from src.domain.value_objects.progress_phase import ProgressPhase
+from src.domain.value_objects.quality_kind import QualityKind
 from src.infrastructure.downloader.error_classifier import classify_error
 from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Default height cap for the video path. A module constant, not a
-# `DownloadOptions` field, on purpose: Day 11C stage 1 is the extraction
-# fix only — letting the user pick 720/1080 is stage 2, and it changes
-# exactly one thing, where this value comes from, not any signature.
-_DEFAULT_MAX_HEIGHT = 720
+# Default height cap for the video path — the fallback for the internal
+# helpers' `max_height` parameter, kept so they stay callable standalone
+# (tests, future callers).
+#
+# Day 11C stage 3: DERIVED from the domain enum, never a second literal
+# 720. `download()` now takes the real value from
+# `options.quality_kind.max_height`, so `QualityKind` is the single
+# tier→height mapping in the project; writing `720` here again would be
+# the parallel mapping that silently goes stale the day a tier changes.
+_DEFAULT_MAX_HEIGHT = QualityKind.HD_720.max_height
 
 _YDL_OPTS_PREVIEW: dict[str, Any] = {
     "quiet": True,
@@ -770,9 +776,13 @@ class YtDlpDownloader:
                 options.timeout_seconds,
                 options.format_kind.value,
                 progress_sink,
-                # Stage 2 replaces this constant with a user-chosen value
-                # off `options`; the plumbing below it stays as-is.
-                _DEFAULT_MAX_HEIGHT,
+                # Day 11C stage 3: the user's chosen tier, resolved to a
+                # pixel height by the domain enum. Crosses the process
+                # boundary as a plain int (pickle-safe), like
+                # `format_kind_value` above — never the enum itself.
+                # Ignored by the audio path, which has no video stream
+                # to cap.
+                options.quality_kind.max_height,
             )
         except _DownloadTimeoutError as exc:
             logger.warning("download_failed", url=url, error=str(exc), reason="timeout")

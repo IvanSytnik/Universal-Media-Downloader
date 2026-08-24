@@ -188,6 +188,13 @@ class ProcessDownloadUseCase:
             # Without this the DownloadOptions default (VIDEO) wins and the
             # MP3 button silently delivers video.
             format_kind=request.format_kind,
+            # Day 11C stage 3: the SAME link for quality — this is the
+            # line 11A.1 was missing for format_kind. Persisting the tier
+            # (stage 2) does nothing on its own; without this the
+            # DownloadOptions default (HD_720) wins and picking 1080p
+            # silently downloads 720p. Guarded by an argument-capture
+            # test, not a bare downloader mock.
+            quality_kind=request.quality_kind,
         )
 
         async def _on_progress(progress: DownloadProgress) -> None:
