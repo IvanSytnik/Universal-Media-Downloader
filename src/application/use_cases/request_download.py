@@ -13,6 +13,12 @@ about audio keeps working unchanged; the guided-flow preview buttons
 pass AUDIO explicitly when the user taps "MP3". The value is persisted on
 the request (not enqueued) — the worker reads it back from the DB.
 
+Day 11C stage 3: takes ``quality_kind`` alongside ``format_kind``, with
+the same defaulting rationale — HD_720 keeps every existing caller
+(/download, and the stage-1..3 buttons) on exactly the behaviour they
+had. Like ``format_kind`` it is persisted on the request rather than
+enqueued: the worker rebuilds the request from the DB by id.
+
 Day 11B: takes required, keyword-only ``chat_id``/``message_id`` — the
 coordinates of the message the worker should edit with progress. No
 default on purpose: unlike ``format_kind`` (which has a sane default,
@@ -29,6 +35,7 @@ from src.domain.interfaces.download_request_repository import DownloadRequestRep
 from src.domain.interfaces.task_queue import TaskQueue
 from src.domain.interfaces.user_repository import UserRepository
 from src.domain.value_objects.format_kind import FormatKind
+from src.domain.value_objects.quality_kind import QualityKind
 from src.domain.value_objects.url_validation import validate_url
 
 
@@ -48,6 +55,7 @@ class RequestDownloadUseCase:
         telegram_id: int,
         url: str,
         format_kind: FormatKind = FormatKind.VIDEO,
+        quality_kind: QualityKind = QualityKind.HD_720,
         *,
         chat_id: int,
         message_id: int,
@@ -66,6 +74,7 @@ class RequestDownloadUseCase:
             user_id=user.id,
             source_url=validated_url,
             format_kind=format_kind,
+            quality_kind=quality_kind,
         )
         await self._download_request_repository.create(request)
         await self._task_queue.enqueue_download(request.id, chat_id, message_id)

@@ -15,6 +15,7 @@ ytdlp_downloader.py).
 from __future__ import annotations
 
 from src.domain.value_objects.format_kind import FormatKind
+from src.domain.value_objects.quality_kind import QualityKind
 from src.infrastructure.downloader.ytdlp_downloader import _build_download_ydl_opts
 
 
@@ -123,3 +124,48 @@ def test_max_filesize_backstop_applied_on_both_paths() -> None:
 def test_no_max_filesize_key_when_unset() -> None:
     opts = _build_download_ydl_opts("/tmp/out", None, FormatKind.VIDEO, _noop_hook)
     assert "max_filesize" not in opts
+
+
+# --- Day 11C stage 3: the tier is what determines the cap ---------------------
+
+
+def test_selector_height_comes_from_the_quality_tier() -> None:
+    """End of the chain: whatever QualityKind.max_height says must be the
+    number in the yt-dlp selector. Written against the enum rather than
+    literal 720/1080 so that changing a tier's height can never leave
+    this test asserting a stale number."""
+    for quality in QualityKind:
+        opts = _build_download_ydl_opts(
+            "/tmp/out", None, FormatKind.VIDEO, _noop_hook, max_height=quality.max_height
+        )
+        assert f"height<={quality.max_height}" in opts["format"]
+
+
+def test_the_two_tiers_produce_different_selectors() -> None:
+    # Guards the degenerate pass: if both tiers resolved to one height,
+    # every per-tier assertion above would still hold.
+    opts_720 = _build_download_ydl_opts(
+        "/tmp/out", None, FormatKind.VIDEO, _noop_hook,
+        max_height=QualityKind.HD_720.max_height,
+    )
+    opts_1080 = _build_download_ydl_opts(
+        "/tmp/out", None, FormatKind.VIDEO, _noop_hook,
+        max_height=QualityKind.HD_1080.max_height,
+    )
+    assert opts_720["format"] != opts_1080["format"]
+
+
+def test_audio_selector_ignores_the_tier_entirely() -> None:
+    """mp3 has no video stream to cap — the audio branch must produce the
+    identical selector at either tier (the DB column carries a tier for
+    audio rows too; nothing may read it into the format string)."""
+    opts_720 = _build_download_ydl_opts(
+        "/tmp/out", None, FormatKind.AUDIO, _noop_hook,
+        max_height=QualityKind.HD_720.max_height,
+    )
+    opts_1080 = _build_download_ydl_opts(
+        "/tmp/out", None, FormatKind.AUDIO, _noop_hook,
+        max_height=QualityKind.HD_1080.max_height,
+    )
+    assert opts_720["format"] == opts_1080["format"]
+    assert "height" not in opts_720["format"]

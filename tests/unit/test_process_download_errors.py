@@ -22,6 +22,7 @@ from src.domain.exceptions import (
     UnsupportedURLError,
 )
 from src.domain.value_objects.format_kind import FormatKind
+from src.domain.value_objects.quality_kind import QualityKind
 from src.infrastructure.localization.fluent_error_localizer import FluentErrorLocalizer
 from src.presentation.telegram.i18n import DEFAULT_LOCALE, create_i18n_core
 
@@ -38,6 +39,12 @@ class _Request:
         # AttributeError. Fixed here as part of Day 11B (touches this
         # use case's execute() signature anyway).
         self.format_kind = FormatKind.VIDEO
+        # Day 11C stage 3: same again for quality_kind. A hand-rolled
+        # fake of an entity has to be updated every time the entity grows
+        # a field the use case reads — it failed loudly here (AttributeError
+        # in every test of this module), which is the good outcome: the
+        # 11A.1 version of this gap was silent in production instead.
+        self.quality_kind = QualityKind.HD_720
 
     def mark_processing(self) -> None:
         self.status = "processing"

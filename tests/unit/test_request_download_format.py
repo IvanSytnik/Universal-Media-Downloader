@@ -2,6 +2,12 @@
 RequestDownloadUseCase onto the persisted request. These tests cover the
 default (video — backward compatible) and the explicit audio path, using
 in-memory fakes for the repos and queue.
+
+Day 11C stage 3: the same WRITE chain for quality_kind. The matching
+READ chain (worker → DownloadOptions) is guarded separately in
+test_process_download_quality.py — 11A.1 was precisely the case where
+the write half was right and the read half was missing, so the two
+halves get their own tests rather than one that could pass on either.
 """
 
 from __future__ import annotations
@@ -90,3 +96,49 @@ def test_entity_and_create_default_video() -> None:
     # Day 11C: quality defaults alongside it — 720p, matching the
     # downloader default from stage 1.
     assert req.quality_kind is QualityKind.HD_720
+
+
+def test_entity_create_accepts_explicit_quality() -> None:
+    req = DownloadRequest.create(
+        user_id=uuid4(),
+        source_url="https://x.y",
+        quality_kind=QualityKind.HD_1080,
+    )
+    assert req.quality_kind is QualityKind.HD_1080
+
+
+@pytest.mark.asyncio
+async def test_explicit_quality_persisted() -> None:
+    repo = _FakeRequestRepo()
+    queue = _FakeQueue()
+    use_case = RequestDownloadUseCase(_FakeUserRepo(_make_user()), repo, queue)
+
+    request = await use_case.execute(
+        42,
+        "https://youtube.com/watch?v=x",
+        FormatKind.VIDEO,
+        QualityKind.HD_1080,
+        chat_id=1,
+        message_id=2,
+    )
+
+    assert request.quality_kind is QualityKind.HD_1080
+    assert repo.created is not None
+    assert repo.created.quality_kind is QualityKind.HD_1080
+
+
+@pytest.mark.asyncio
+async def test_quality_defaults_to_720_when_caller_omits_it() -> None:
+    # /download and every pre-stage-4 caller pass nothing — they must
+    # keep the exact behaviour they had.
+    repo = _FakeRequestRepo()
+    queue = _FakeQueue()
+    use_case = RequestDownloadUseCase(_FakeUserRepo(_make_user()), repo, queue)
+
+    request = await use_case.execute(
+        42, "https://youtube.com/watch?v=x", chat_id=1, message_id=2
+    )
+
+    assert request.quality_kind is QualityKind.HD_720
+    assert repo.created is not None
+    assert repo.created.quality_kind is QualityKind.HD_720

@@ -47,6 +47,7 @@ from src.domain.value_objects.download_progress import DownloadProgress
 from src.domain.value_objects.enums import MediaType
 from src.domain.value_objects.format_kind import FormatKind
 from src.domain.value_objects.progress_phase import ProgressPhase
+from src.domain.value_objects.quality_kind import QualityKind
 from src.infrastructure.downloader import ytdlp_downloader
 from src.infrastructure.downloader.ytdlp_downloader import YtDlpDownloader
 
@@ -453,6 +454,101 @@ async def test_download_forwards_default_max_height_to_child_runner(
 
     assert captured["max_height"] == 720
     assert captured["max_height"] == ytdlp_downloader._DEFAULT_MAX_HEIGHT
+
+
+@pytest.mark.parametrize(
+    ("quality", "expected_height"),
+    [(QualityKind.HD_720, 720), (QualityKind.HD_1080, 1080)],
+)
+@pytest.mark.asyncio
+async def test_download_forwards_chosen_quality_height_to_child_runner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, quality, expected_height
+) -> None:
+    """Day 11C stage 3: the height crossing into the child process must
+    come from the tier on `options`, not from the module default.
+
+    Both tiers are asserted, and against DIFFERENT numbers: a test that
+    only checked 720 would pass identically if `download()` still ignored
+    `options` and forwarded `_DEFAULT_MAX_HEIGHT`. 1080 is what makes it
+    able to fail — that is the whole lesson of 11A.1.
+    """
+    expected_path = str(tmp_path / "video.mp4")
+    captured: dict[str, Any] = {}
+
+    def _fake_run_download_in_process(
+        url: str,
+        output_dir: str,
+        max_filesize_bytes: int | None,
+        timeout_seconds: int,
+        format_kind_value: str,
+        progress_sink,
+        max_height: int,
+    ) -> str:
+        captured["max_height"] = max_height
+        return expected_path
+
+    monkeypatch.setattr(
+        ytdlp_downloader, "_run_download_in_process", _fake_run_download_in_process
+    )
+
+    downloader = YtDlpDownloader()
+    options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60, quality_kind=quality)
+    await downloader.download("https://example.com/video", options)
+
+    assert captured["max_height"] == expected_height
+    # Crosses the process boundary as a plain int (pickle-safe), never
+    # the enum itself — same convention as format_kind_value.
+    assert type(captured["max_height"]) is int
+
+
+@pytest.mark.asyncio
+async def test_audio_download_still_forwards_a_height_but_ignores_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Quality is meaningless for mp3. The plumbing stays uniform (the
+    argument is always passed), and the audio branch of
+    `_build_download_ydl_opts` is what ignores it — pinned in
+    test_download_ydl_opts.py. Here: an audio download with HD_1080 must
+    not blow up or change the forwarded contract.
+    """
+    expected_path = str(tmp_path / "audio.mp3")
+    captured: dict[str, Any] = {}
+
+    def _fake_run_download_in_process(
+        url: str,
+        output_dir: str,
+        max_filesize_bytes: int | None,
+        timeout_seconds: int,
+        format_kind_value: str,
+        progress_sink,
+        max_height: int,
+    ) -> str:
+        captured["format_kind_value"] = format_kind_value
+        captured["max_height"] = max_height
+        return expected_path
+
+    monkeypatch.setattr(
+        ytdlp_downloader, "_run_download_in_process", _fake_run_download_in_process
+    )
+
+    downloader = YtDlpDownloader()
+    options = DownloadOptions(
+        output_dir=tmp_path,
+        timeout_seconds=60,
+        format_kind=FormatKind.AUDIO,
+        quality_kind=QualityKind.HD_1080,
+    )
+    await downloader.download("https://example.com/audio", options)
+
+    assert captured["format_kind_value"] == "audio"
+    assert captured["max_height"] == 1080
+
+
+def test_default_max_height_derives_from_the_domain_enum() -> None:
+    """Guards against a second tier→height mapping reappearing in
+    infrastructure: the module constant must BE the enum's value, not a
+    literal that happens to match it today."""
+    assert QualityKind.HD_720.max_height == ytdlp_downloader._DEFAULT_MAX_HEIGHT
 
 
 def test_preview_opts_pin_no_player_client() -> None:
