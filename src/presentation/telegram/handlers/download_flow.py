@@ -80,12 +80,15 @@ from src.presentation.telegram.formatting import (
 from src.presentation.telegram.keyboards import (
     BTN_KEY_DOWNLOAD,
     BTN_KEY_HELP,
+    CB_BACK_PREFIX,
     CB_CANCEL_PREFIX,
     CB_CONFIRM_PREFIX,
     CB_FLOW_DOWNLOAD,
     CB_FLOW_HELP,
+    CB_QUALITY_PREFIX,
     parse_confirm_callback,
     preview_confirm_keyboard,
+    quality_picker_keyboard,
 )
 from src.presentation.telegram.states import DownloadFlow
 from src.shared.logging import get_logger
@@ -239,6 +242,54 @@ async def handle_plain_url(
 # --- Preview card buttons ---------------------------------------------------
 
 
+@router.callback_query(F.data.startswith(CB_QUALITY_PREFIX))
+async def handle_open_quality_picker(
+    callback: CallbackQuery,
+    i18n: I18nContext,
+    preview_store: PreviewContextStorePort,
+) -> None:
+    """Step 1 -> 2: swap the card's markup for the tier picker.
+
+    The token is only READ here, never claimed: the user may still tap
+    Back, and a picker that consumed the token would strand them on a
+    dead card. It IS checked, though — showing tiers for an expired
+    preview would just move the failure one tap later, after the user
+    has made a choice, which is a worse place to learn about it.
+    """
+    token = (callback.data or "")[len(CB_QUALITY_PREFIX):]
+    if await preview_store.get(token) is None:
+        await callback.answer(i18n.get("flow-preview-stale"), show_alert=True)
+        return
+
+    if isinstance(callback.message, Message):
+        # Only the markup changes — the preview text stays put, so the
+        # card doesn't flicker and nothing needs re-escaping.
+        await callback.message.edit_reply_markup(
+            reply_markup=quality_picker_keyboard(i18n, token)
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(CB_BACK_PREFIX))
+async def handle_back_to_format(
+    callback: CallbackQuery,
+    i18n: I18nContext,
+    preview_store: PreviewContextStorePort,
+) -> None:
+    """Step 2 -> 1. Same token, nothing consumed on either leg, so the
+    user can bounce between the two steps until the TTL runs out."""
+    token = (callback.data or "")[len(CB_BACK_PREFIX):]
+    if await preview_store.get(token) is None:
+        await callback.answer(i18n.get("flow-preview-stale"), show_alert=True)
+        return
+
+    if isinstance(callback.message, Message):
+        await callback.message.edit_reply_markup(
+            reply_markup=preview_confirm_keyboard(i18n, token)
+        )
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith(CB_CONFIRM_PREFIX))
 async def handle_confirm_download(
     callback: CallbackQuery,
@@ -249,12 +300,19 @@ async def handle_confirm_download(
     settings: Settings,
     rate_limiter: RateLimiterPort,
 ) -> None:
-    # Day 11A: the payload now carries the chosen format after the token.
-    # parse_confirm_callback tolerates the legacy bare "dl:<token>" form
-    # (defaults to video), so buttons rendered before this deploy still
-    # work.
-    token, format_kind = parse_confirm_callback(callback.data or "")
-    url = await preview_store.get(token)
+    # Day 11A: the payload carries the chosen format after the token.
+    # Day 11C stage 4: for video it carries the quality tier too. The
+    # parser tolerates every older form (bare "dl:<token>", tierless
+    # "dl:<token>:v"), so buttons rendered before this deploy still work
+    # and degrade to HD_720 — what those buttons actually did.
+    token, format_kind, quality_kind = parse_confirm_callback(callback.data or "")
+
+    # Day 11C stage 4: CLAIM the token atomically instead of get-then-
+    # delete-later. This is the whole double-tap guard: two fast taps on
+    # 720p used to both read the URL before either delete landed, and
+    # enqueued two downloads. Now the loser gets None and falls into the
+    # stale-preview branch below.
+    url = await preview_store.pop(token)
 
     if url is None:
         await callback.answer(i18n.get("flow-preview-stale"), show_alert=True)
@@ -281,8 +339,6 @@ async def handle_confirm_download(
         )
         return
 
-    await preview_store.delete(token)
-
     telegram_id = callback.from_user.id
     chat_id = callback.message.chat.id
     message_id = callback.message.message_id
@@ -295,7 +351,12 @@ async def handle_confirm_download(
         )
         try:
             request = await use_case.execute(
-                telegram_id, url, format_kind, chat_id=chat_id, message_id=message_id
+                telegram_id,
+                url,
+                format_kind,
+                quality_kind,
+                chat_id=chat_id,
+                message_id=message_id,
             )
         except UnsupportedURLError as exc:
             # Our validator again (RequestDownloadUseCase re-validates).
@@ -309,6 +370,7 @@ async def handle_confirm_download(
         request_id=str(request.id),
         telegram_id=telegram_id,
         format_kind=format_kind.value,
+        quality_kind=quality_kind.value,
     )
 
     if isinstance(callback.message, Message):

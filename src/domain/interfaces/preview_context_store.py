@@ -33,3 +33,19 @@ class PreviewContextStorePort(Protocol):
         missing/expired token is not an error (the user may double-tap
         the button, or cancel after expiry)."""
         ...
+
+    async def pop(self, token: str) -> str | None:
+        """Atomically returns the URL for `token` AND removes it.
+
+        Day 11C stage 4. ``get`` followed by ``delete`` is not equivalent:
+        two fast taps on the same button both complete their ``get``
+        before either ``delete`` lands, and the download is enqueued
+        twice. Claiming the token in one round trip makes the second tap
+        see None and fall through to the stale-preview path, so
+        "first tap wins" is enforced by the store rather than by luck.
+
+        Use this wherever consuming the token commits to an action; keep
+        ``get`` for read-only steps (e.g. opening the quality picker,
+        which the user may still back out of).
+        """
+        ...
