@@ -11,6 +11,7 @@ from sqlalchemy.sql import func
 
 from src.domain.value_objects.enums import DownloadStatus, MediaType
 from src.domain.value_objects.format_kind import FormatKind
+from src.domain.value_objects.quality_kind import QualityKind
 from src.infrastructure.database.engine import Base
 
 
@@ -50,6 +51,15 @@ class DownloadRequestModel(Base):
     # normal video download — the pre-Day-11 behaviour, unchanged.
     format_kind: Mapped[FormatKind] = mapped_column(
         String(20), default=FormatKind.VIDEO, server_default=FormatKind.VIDEO.value
+    )
+    # Day 11C: requested video quality tier. NOT NULL with a
+    # server_default of "hd_720" so pre-migration rows backfill to the
+    # Day 11C stage 1 default (720p) — the behaviour they actually ran
+    # with. Audio rows carry this value and never read it. String(16)
+    # rather than the tightest fit: "hd_1080" needs 7, and a wider tier
+    # name later shouldn't cost a migration.
+    quality_kind: Mapped[QualityKind] = mapped_column(
+        String(16), default=QualityKind.HD_720, server_default=QualityKind.HD_720.value
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

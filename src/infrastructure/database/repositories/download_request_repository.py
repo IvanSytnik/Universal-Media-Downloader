@@ -5,6 +5,12 @@ It is deliberately NOT touched in ``update``: the requested format is
 fixed the moment the request is created and never changes over the
 request's lifecycle (only status/completed_at do), so writing it back on
 every state transition would be pointless churn.
+
+Day 11C: ``quality_kind`` follows exactly the same rule (mapped on read
+and on create, never on update). It is parsed via
+``QualityKind.from_db_value`` rather than the bare enum constructor:
+rows are untrusted input here, and a value this build doesn't recognize
+must degrade to the default tier, not raise inside the worker.
 """
 
 from __future__ import annotations
@@ -17,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.domain.entities.download_request import DownloadRequest
 from src.domain.value_objects.enums import DownloadStatus, MediaType
 from src.domain.value_objects.format_kind import FormatKind
+from src.domain.value_objects.quality_kind import QualityKind
 from src.infrastructure.database.models import DownloadRequestModel
 
 
@@ -28,6 +35,7 @@ def _to_entity(model: DownloadRequestModel) -> DownloadRequest:
         media_type=MediaType(model.media_type),
         status=DownloadStatus(model.status),
         format_kind=FormatKind(model.format_kind),
+        quality_kind=QualityKind.from_db_value(model.quality_kind),
         created_at=model.created_at,
         completed_at=model.completed_at,
     )
@@ -49,6 +57,7 @@ class SqlAlchemyDownloadRequestRepository:
             media_type=download_request.media_type.value,
             status=download_request.status.value,
             format_kind=download_request.format_kind.value,
+            quality_kind=download_request.quality_kind.value,
         )
         self._session.add(model)
         await self._session.flush()

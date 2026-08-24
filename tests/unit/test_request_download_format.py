@@ -14,6 +14,7 @@ from src.application.use_cases.request_download import RequestDownloadUseCase
 from src.domain.entities.download_request import DownloadRequest
 from src.domain.entities.user import User
 from src.domain.value_objects.format_kind import FormatKind
+from src.domain.value_objects.quality_kind import QualityKind
 
 
 class _FakeUserRepo:
@@ -86,3 +87,6 @@ def test_entity_and_create_default_video() -> None:
     # Entity-level default: unchanged construction still yields video.
     req = DownloadRequest.create(user_id=uuid4(), source_url="https://x.y")
     assert req.format_kind is FormatKind.VIDEO
+    # Day 11C: quality defaults alongside it — 720p, matching the
+    # downloader default from stage 1.
+    assert req.quality_kind is QualityKind.HD_720
