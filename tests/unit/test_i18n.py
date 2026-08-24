@@ -27,6 +27,8 @@ _REQUIRED_KEYS_SIMPLE = [
     "progress-converting",
     # Day 11C.3 — worker-path message for an unreadable DB row.
     "error-internal",
+    # Day 11C stage 4 — quality picker (step 2 of the video flow).
+    "btn-quality-720", "btn-quality-1080", "btn-back",
 ]
 
 

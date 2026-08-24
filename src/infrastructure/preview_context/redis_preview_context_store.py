@@ -7,6 +7,10 @@ a callback (defense in depth; callbacks are also per-chat anyway).
 
 TTL is enforced by Redis itself (SET ... EX), not by application code —
 no cleanup job needed, expired entries just vanish.
+
+Day 11C stage 4 adds ``pop`` on top of Redis GETDEL (server-side, one
+round trip) — see the port docstring for why get+delete isn't good
+enough for the confirm step.
 """
 
 from __future__ import annotations
@@ -36,3 +40,10 @@ class RedisPreviewContextStore:
 
     async def delete(self, token: str) -> None:
         await self._redis.delete(_KEY_PREFIX + token)
+
+    async def pop(self, token: str) -> str | None:
+        """GETDEL — atomic claim. Redis >= 6.2 (we run 7.x)."""
+        value = await self._redis.getdel(_KEY_PREFIX + token)
+        if value is None:
+            return None
+        return value.decode("utf-8") if isinstance(value, bytes) else str(value)

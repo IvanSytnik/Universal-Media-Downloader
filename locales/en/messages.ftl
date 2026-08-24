@@ -10,6 +10,12 @@ btn-confirm = ✅ Download
 btn-confirm-video = ⬇️ Video
 btn-confirm-audio = 🎵 MP3
 btn-cancel = ❌ Cancel
+# Day 11C: step 2 of the video flow — quality picker. The tier labels
+# are digits only, so they read the same in both locales; the keys
+# exist in both regardless (key parity is a hard rule, see test_i18n).
+btn-quality-720 = 720p
+btn-quality-1080 = 1080p
+btn-back = ◀️ Back
 
 # --- Menu commands (set_my_commands) ---
 cmd-start = Main menu
