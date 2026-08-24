@@ -33,6 +33,15 @@ closing over the already-loaded ``request``/``user`` and hands it to
 ``downloader.download(...)``; the callback's only job is to forward each
 ``DownloadProgress`` to ``ProgressPublisherPort.publish`` with the
 routing/locale extras attached. No new DB reads on the progress path.
+
+Day 11C.1 — the load itself can now fail *reportably*. Reading a row
+whose stored status is unreadable raises ``CorruptedRecordError`` from
+``get_by_id``, i.e. before ``request`` exists — so the normal failure
+path (mark the entity failed, notify) is unavailable: there is no
+entity. That case gets its own recovery below, which leans on the two
+uuid columns the exception carries out of the failed read. Without it
+the error would escape the job unhandled and the user, whose request
+was already accepted, would simply never hear back (bugs #6 and #13).
 """
 
 from __future__ import annotations
@@ -40,6 +49,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from src.domain.exceptions import (
+    CorruptedRecordError,
     DownloaderError,
     ExtractionError,
     FileTooLargeError,
@@ -120,8 +130,43 @@ class ProcessDownloadUseCase:
             )
         return self._error_localizer.localize(error_key, locale)
 
+    async def _report_corrupted_record(self, exc: CorruptedRecordError) -> None:
+        """Recovery for a row that couldn't be read into an entity.
+
+        Marks the request failed by id (``update`` needs the entity we
+        failed to build) and sends one short localized message. The user
+        is reachable because the exception carries ``user_id`` from the
+        same row — the uuid columns survive an unreadable enum column
+        next to them.
+
+        Full diagnostics (which column, what the raw value was) go to
+        the log and never into the message: the user can't act on them,
+        and leaking them is bug #6.
+        """
+        logger.error(
+            "process_download_corrupted_record",
+            request_id=str(exc.request_id),
+            user_id=str(exc.user_id),
+            column=exc.column,
+            raw_value=exc.raw_value,
+        )
+        await self._download_request_repository.mark_failed_by_id(exc.request_id)
+
+        user = await self._user_repository.get_by_id(exc.user_id)
+        if user is None or user.telegram_id is None:
+            return
+        await self._notifier.send_text(
+            user.telegram_id,
+            self._error_localizer.localize(exc.error_key, user.language),
+        )
+
     async def execute(self, request_id: UUID, chat_id: int, message_id: int) -> None:
-        request = await self._download_request_repository.get_by_id(request_id)
+        try:
+            request = await self._download_request_repository.get_by_id(request_id)
+        except CorruptedRecordError as exc:
+            await self._report_corrupted_record(exc)
+            return
+
         if request is None:
             logger.warning("process_download_request_not_found", request_id=str(request_id))
             return

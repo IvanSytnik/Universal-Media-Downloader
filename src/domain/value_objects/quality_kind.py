@@ -16,9 +16,15 @@ moment a tier is added (a 4K tier would silently keep downloading 1080p).
 this boundary: a row written by a newer version (or hand-edited) would
 make the bare ``QualityKind(value)`` constructor raise ``ValueError``
 deep inside the worker, killing a job that was already accepted from the
-user. Degrading to the default tier with a warning is strictly better —
-same precedent as ``ProgressPhase`` never being constructed from pubsub
-payloads (Day 11B).
+user. Degrading to the default tier is strictly better — same precedent
+as ``ProgressPhase`` never being constructed from pubsub payloads (Day
+11B). ``MediaType`` and ``FormatKind`` carry the same method for the
+same reason.
+
+The fallback is not logged here: only the repository knows WHICH row
+held the bad value, and a warning without that id is unactionable. The
+warning lives in ``_to_entity`` instead, which keeps the domain free of
+a logging dependency.
 
 Audio downloads ignore quality entirely; their rows carry the default
 tier and nothing reads it (see the entity docstring).
@@ -27,10 +33,6 @@ tier and nothing reads it (see the entity docstring).
 from __future__ import annotations
 
 from enum import StrEnum
-
-from src.shared.logging import get_logger
-
-logger = get_logger(__name__)
 
 
 class QualityKind(StrEnum):
@@ -58,5 +60,4 @@ class QualityKind(StrEnum):
         try:
             return cls(value)
         except ValueError:
-            logger.warning("quality_kind_unknown_value", value=value, fallback=cls.HD_720.value)
             return cls.HD_720

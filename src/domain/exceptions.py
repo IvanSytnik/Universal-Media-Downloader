@@ -26,6 +26,8 @@ not here — the domain only defines the vocabulary.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 
 class DownloaderError(Exception):
     """Base class for all downloader-related errors."""
@@ -132,3 +134,46 @@ class FileTooLargeError(ExtractionError):
 class NotifierError(Exception):
     """Delivering a result to the user failed (file too large, user
     blocked the bot, Telegram API error, etc.)."""
+
+
+class CorruptedRecordError(Exception):
+    """A persisted row holds a value this build cannot interpret, and no
+    honest fallback exists for it.
+
+    Raised only for columns where degrading would LIE. ``media_type``,
+    ``format_kind`` and ``quality_kind`` all have a truthful default
+    ("unknown", "video", "hd_720"), so an unrecognized value there
+    degrades with a warning. ``status`` has none: silently reading a
+    corrupt status as "pending" would resurrect a finished request and
+    re-run a download the user already received.
+
+    It deliberately does NOT raise a bare ``ValueError`` at the call
+    site (which is what ``DownloadStatus(row.status)`` used to do). That
+    would escape the worker unhandled, arq would log a traceback, and
+    the user — whose request was already accepted — would get nothing at
+    all. Instead this carries an ``error_key`` like every downloader
+    error, so the worker path marks the request failed and delivers one
+    short localized message, with the diagnostics going to the log
+    (bugs #6 and #13).
+
+    ``request_id``/``user_id`` come from the same row: they are uuid
+    columns, so they are readable even when an enum column next to them
+    is not — which is what makes notifying the user possible at all from
+    inside a failed read.
+    """
+
+    error_key = "error-internal"
+
+    def __init__(
+        self,
+        *,
+        column: str,
+        raw_value: str,
+        request_id: UUID,
+        user_id: UUID,
+    ) -> None:
+        super().__init__(f"unreadable value in column {column!r}")
+        self.column = column
+        self.raw_value = raw_value
+        self.request_id = request_id
+        self.user_id = user_id
