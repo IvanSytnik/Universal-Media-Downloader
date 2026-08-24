@@ -15,6 +15,8 @@ from collections.abc import AsyncGenerator
 
 import pytest
 import pytest_asyncio
+import structlog
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from src.domain.entities.download_request import DownloadRequest
@@ -99,3 +101,42 @@ async def test_update_does_not_clobber_quality_kind(session: AsyncSession) -> No
     fetched = await repo.get_by_id(request.id)
     assert fetched is not None
     assert fetched.quality_kind is QualityKind.HD_1080
+
+
+@pytest.mark.asyncio
+async def test_listing_skips_a_corrupted_row_instead_of_dying(session: AsyncSession) -> None:
+    """Day 11C stage 5: one unreadable row must not hide a user's whole
+    history.
+
+    ``get_by_id`` raises CorruptedRecordError — right, because that one
+    request genuinely cannot be processed. A LISTING is a set of
+    independent rows, so the same exception there would turn one bad row
+    into "all your downloads vanished". It skips instead, and says so in
+    the log (a silently shorter list is undebuggable).
+    """
+    user = await _make_user(session)
+    repo = SqlAlchemyDownloadRequestRepository(session)
+
+    good = DownloadRequest.create(user_id=user.id, source_url="https://example.com/good")
+    bad = DownloadRequest.create(user_id=user.id, source_url="https://example.com/bad")
+    await repo.create(good)
+    await repo.create(bad)
+    await session.commit()
+
+    # Corrupt one row the way only a foreign writer or a rollback could:
+    # the column is a plain varchar with no CHECK constraint.
+    await session.execute(
+        text("update download_requests set status = 'garbage' where id = :id"),
+        {"id": bad.id.hex},
+    )
+    await session.commit()
+    session.expire_all()
+
+    with structlog.testing.capture_logs() as logs:
+        listed = await repo.list_by_user(user.id)
+
+    assert [r.id for r in listed] == [good.id]
+    entry = [e for e in logs if e["event"] == "download_request_skipped_in_listing"][0]
+    assert entry["log_level"] == "error"
+    assert entry["request_id"] == str(bad.id)
+    assert entry["raw_value"] == "garbage"

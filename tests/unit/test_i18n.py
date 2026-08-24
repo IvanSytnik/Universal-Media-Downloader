@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 
 from src.presentation.telegram.i18n import (
@@ -11,25 +14,67 @@ from src.presentation.telegram.i18n import (
     create_i18n_core,
 )
 
-# All FTL keys the Presentation layer references. If a locale is missing
-# any of these, core.get raises (raise_key_error=True) — this test is the
-# CI guard that keeps ru/en structurally in sync.
-_REQUIRED_KEYS_SIMPLE = [
-    "btn-download", "btn-help", "btn-confirm", "btn-cancel",
-    "cmd-start", "cmd-download", "cmd-preview", "cmd-help",
-    "start-greeting", "flow-send-url", "flow-placeholder",
-    "preview-fetching", "preview-uploader-unknown", "preview-duration-unknown",
-    "flow-download-started", "flow-cancelled", "flow-preview-stale",
-    "error-unsupported-site", "download-usage", "download-started",
-    "preview-usage", "health-ok", "worker-status-empty", "help-any-site",
-    # Day 11B / 11B.1 — these were missing from this guard list even
-    # though TASK_Day11B.md claimed it would "pick them up automatically".
-    "progress-converting",
-    # Day 11C.3 — worker-path message for an unreadable DB row.
-    "error-internal",
-    # Day 11C stage 4 — quality picker (step 2 of the video flow).
-    "btn-quality-720", "btn-quality-1080", "btn-back",
-]
+# Day 11C stage 5: the key list is DERIVED from the FTL files, not
+# maintained by hand.
+#
+# It used to be a literal list, and it failed open: forgetting to add a
+# new key meant a green test and a live gap in a locale. That happened
+# twice (11B's progress keys, 11C's error-internal), which is the whole
+# argument — a guard that depends on remembering to update the guard is
+# not a guard. Now a key that exists in one locale and not the other
+# fails here by construction, and a new key is covered the moment it is
+# written.
+_LOCALES_DIR = Path(__file__).resolve().parents[2] / "locales"
+
+# A message line is `key = value` at column 0; continuation lines are
+# indented, so anchoring at the start is what separates them.
+_MESSAGE_RE = re.compile(r"^([a-zA-Z][a-zA-Z0-9_-]*) *=", re.MULTILINE)
+# Fluent placeables: `{ $name }` and selector heads `{ $name ->`.
+_VARIABLE_RE = re.compile(r"\{\s*\$([a-zA-Z][a-zA-Z0-9_]*)")
+
+
+def _ftl_text(locale: str) -> str:
+    return (_LOCALES_DIR / locale / "messages.ftl").read_text(encoding="utf-8")
+
+
+def _keys_in(locale: str) -> set[str]:
+    return set(_MESSAGE_RE.findall(_ftl_text(locale)))
+
+
+def _variables_by_key(locale: str) -> dict[str, set[str]]:
+    """Map each message to the argument names it interpolates.
+
+    Needed so the resolve test can call parametrized messages with
+    something — a message rendered without its arguments doesn't prove
+    much (and for plural selectors, doesn't resolve at all).
+    """
+    text = _ftl_text(locale)
+    starts = [(m.group(1), m.start()) for m in _MESSAGE_RE.finditer(text)]
+    result: dict[str, set[str]] = {}
+    for i, (key, start) in enumerate(starts):
+        end = starts[i + 1][1] if i + 1 < len(starts) else len(text)
+        result[key] = set(_VARIABLE_RE.findall(text[start:end]))
+    return result
+
+
+def test_locales_declare_exactly_the_same_keys() -> None:
+    """The parity guard. Any key present in one locale and missing in the
+    other is a live hole: core.get raises with raise_key_error=True, so
+    the user hits an exception instead of a message."""
+    per_locale = {locale: _keys_in(locale) for locale in SUPPORTED_LOCALES}
+    reference = per_locale[DEFAULT_LOCALE]
+    for locale, keys in per_locale.items():
+        assert keys == reference, (
+            f"{locale} differs from {DEFAULT_LOCALE}: "
+            f"only in {locale}: {sorted(keys - reference)}, "
+            f"missing from {locale}: {sorted(reference - keys)}"
+        )
+
+
+def test_locales_are_not_empty() -> None:
+    # Guards the parser itself: a regex that matched nothing would make
+    # the parity test above pass against two empty sets.
+    assert len(_keys_in(DEFAULT_LOCALE)) > 20
 
 
 @pytest.fixture
@@ -40,10 +85,15 @@ async def core():
 
 
 @pytest.mark.asyncio
-async def test_all_locales_resolve_all_simple_keys(core) -> None:
+async def test_every_key_resolves_in_every_locale(core) -> None:
+    """Every message in the files actually renders — no key is a stub, a
+    typo, or a broken selector. Arguments are supplied from the message's
+    own placeables, so parametrized keys are covered too (1 works for
+    both plural selectors and plain interpolation)."""
+    variables = _variables_by_key(DEFAULT_LOCALE)
     for locale in SUPPORTED_LOCALES:
-        for key in _REQUIRED_KEYS_SIMPLE:
-            value = core.get(key, locale)
+        for key in _keys_in(locale):
+            value = core.get(key, locale, **{name: 1 for name in variables.get(key, ())})
             assert value and value != key, f"{locale}:{key} unresolved"
 
 
