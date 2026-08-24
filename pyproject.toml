@@ -15,7 +15,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0,<3.0",
     "alembic>=1.13,<2.0",
     "arq>=0.26,<1.0",
-    "yt-dlp>=2024.10.0",
+    "yt-dlp>=2026.08.19",
 ]
 
 [project.optional-dependencies]

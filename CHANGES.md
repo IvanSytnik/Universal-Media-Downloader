@@ -1,131 +1,116 @@
-# Day 11B — Прогресс скачивания в реальном времени + статус конвертации
+# Day 11C, Этап 1 — починка извлечения: реальное качество вместо 360p
 
 Прямые правки в рабочей копии (Claude Code), не zip-патч. `git diff` — источник
-истины для ревью.
+истины для ревью. **Не закоммичено**, live-прогон делает пользователь.
+
+Скоуп этапа — **только** извлечение и селектор форматов. Без UI, без БД, без
+изменений домена. Выбор качества пользователем (кнопки/меню, `DownloadRequest`,
+миграция, use cases) — следующие этапы.
+
+## Диагностика (проведена вживую в docker до патча)
+
+Три причины, две из них наши:
+
+1. **Устаревший yt-dlp в образе** (2026.07.04) — предшествует SABR-раскатке
+   YouTube. Высокие форматы, которые он перечислял, отдавали 403 при
+   скачивании; рабочим оставался единственный combined-формат `18` (360p).
+   yt-dlp 2026.08.19 сам выбирает работающий клиент (на момент проверки —
+   `visionos`), качает 1080p avc1 и мёржит video+audio в mp4. Подтверждено на
+   3 роликах (159–548 МБ).
+2. **Наш хардкод `player_client=["android","web"]`** — заводился когда-то как
+   митигация 403, но сам стал причиной 360p: пинил yt-dlp к клиентам, которым
+   YouTube больше не отдаёт полный список форматов. Убран.
+3. **Селектор `best[ext=mp4]/best`** никогда не запрашивал раздельные потоки —
+   он берёт формат, у которого ОДНОВРЕМЕННО есть vcodec и acodec, а такой
+   практически только один (`18`). `merge_output_format: mp4` при этом стоял на
+   месте, но мёржить было нечего.
 
 ## Что сделано
 
-**Day 11B (база).** Реальный прогресс скачивания вместо статичного «⏳
-Скачивание начато…»: превью-сообщение теперь редактируется по ходу
-скачивания («⏳ Скачиваю… 42%» / «⏳ Скачано 12.3 МБ (1.1 МБ/с)» для потоков
-без известного размера), с троттлингом (не чаще раз в 3с И шаг ≥5%).
+- **`pyproject.toml`**: `yt-dlp>=2024.10.0` → **`yt-dlp>=2026.08.19`**. Это пин
+  рантайм-корректности, а не рутинный апгрейд — понижать нельзя, вернётся 360p.
+- **`_build_download_ydl_opts`**: новый параметр `max_height: int = 720`.
+  - VIDEO-селектор →
+    `bestvideo[height<={max_height}][vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4][height<={max_height}]/best[ext=mp4]/best`.
+    `merge_output_format: mp4` без изменений — теперь ему есть что мёржить.
+  - AUDIO-селектор → `bestaudio[ext=m4a]/bestaudio/best` (сначала настоящая
+    audio-only дорожка, чтобы не тянуть полный muxed-поток ради выбрасывания
+    видео в ffmpeg). `FFmpegExtractAudio` не тронут.
+  - `extractor_args`/`player_client` удалён из общего блока опций и из
+    `_YDL_OPTS_PREVIEW`.
+- **Проброс `max_height` в child-процесс**: `download()` → `_run_download_in_process`
+  → `ctx.Process(args=...)` → `_download_worker_entrypoint` →
+  `_build_download_ydl_opts`. Обычный `int`, pickle-safe, как `format_kind_value`.
+  Логика `_wait_and_drain_progress` (контракт terminate-по-таймауту, Day 5) не
+  тронута ни на строку.
 
-**Day 11B.1 (этот патч поверх базы, до коммита).** Live-прогон 11B на
-реальном mp3-скачивании выявил: пользователь видит «Скачиваю… 100%»
-неподвижно ~4-5 минут, пока идёт ffmpeg-транскод (`FFmpegExtractAudio`)
-после самого скачивания — выглядит как зависание. Добавлен статус
-**«⏳ Конвертирую в MP3…»**, показываемый на границе download→postprocess,
-только для audio-пути.
+### Два решения по форме, отступающие от буквы задания (согласованы)
 
-Отдельная находка того же live-прогона: audio-путь скачивает ~1.03 GiB
-(полный muxed video+audio поток, формат `18`/360p), а не отдельную
-audio-only дорожку (~50-440 МБ в зависимости от длины видео) — несмотря на
-корректный селектор `bestaudio/best`. Диагностировано через `yt-dlp -F` с
-точными extractor-args воркера: `player_client=["android","web"]` не
-получает audio-only форматы для тестового видео (YouTube отдаёт только
-`18` при этом наборе клиентов; `android_vr,web` показывает и audio-only
-139/249/140/251, и не более высокое видео-качество — `18` остаётся
-единственным combined-форматом даже там). **Сознательно НЕ фиксится в этом
-патче** — отдельный день с продуктовым обсуждением, см. HANDOFF → Day 11C.
+- `max_height` — **последний** параметр `_build_download_ydl_opts`, после
+  `progress_hook`, а не рядом с `format_kind`. Существующие вызовы в тестах
+  позиционные, и вставка int между `format_kind` и `post_hook` молча
+  пересвязала бы `post_hook` (он типизирован `Any` — ни mypy, ни рантайм не
+  поймали бы). Продакшн-вызов один и keyword-only.
+- Источник значения — модульная константа `_DEFAULT_MAX_HEIGHT = 720`, не поле
+  `DownloadOptions`: домен вне скоупа этапа. Проводка при этом живая и
+  протестированная; Этап 2 меняет ровно одно место — откуда берётся значение.
 
-## Архитектурное решение: сигнал границы фаз — тот же канал, не новый
+## avc1 — сознательная цена
 
-yt-dlp сам эмитит событие `status == "finished"` в `progress_hooks` на
-границе download→postprocess — оно и раньше долетало до
-`_record_progress`, но откидывалось (`_download_worker_entrypoint`,
-Day 11B). Day 11B.1 просто перестаёт его откидывать для audio-пути:
-эмитит bare-маркер `{"phase": ProgressPhase.CONVERTING}` через ТОТ ЖЕ
-`progress_queue` → asyncio-bridge → `progress_callback` путь, что и
-обычные проценты — второй канал не понадобился. Video-путь маркер не
-эмитит: там нет ffmpeg-транскода, лишний статус не нужен.
+`vcodec^=avc1` заметно увеличивает размер файла против vp9/av1 того же
+разрешения. Оставлен намеренно: это то, что делает результат воспроизводимым
+inline в клиентах Telegram. Хвост фолбэков в селекторе деградирует мягко
+(capped combined → любой mp4 → что угодно), так что источник без avc1 или без
+раздельных дорожек всё равно скачается.
 
-`ProgressPhase` — маленький `StrEnum` (`DOWNLOADING`/`CONVERTING`) по
-прецеденту `FormatKind`: неизвестное/отсутствующее значение → безопасный
-дефолт, вместо magic-строк в трёх местах (VO, downloader, listener).
-Ключевое для устойчивости: `DownloadProgress.phase` — поле с дефолтом
-(`ProgressPhase.DOWNLOADING`), так что все существующие конструкторы VO
-не сломались; `TelegramProgressListener` читает `payload.get("phase",
-...)`, никогда `payload["phase"]` — иначе старое событие без `phase` в
-потоке (rolling deploy) уронит долгоживущий listener на `KeyError`. На
-границе Redis (JSON) `StrEnum` сериализуется как обычная строка
-автоматически — паблишеру не нужно вручную звать `.value`; а listener
-после `json.loads` НЕ конструирует `ProgressPhase(...)` из данных
-пришедших по pubsub (это `ValueError` на незнакомом значении от более
-новой версии продюсера) — только сравнение на равенство.
+## Тесты (241 passed, было 235)
 
-Статус «Конвертирую» — одноразовое событие границы фаз, а не точка в
-потоке процентов, поэтому **обходит троттлинг** listener'а целиком
-(`_handle_message` пропускает `should_emit` для `phase == CONVERTING`).
+`tests/unit/test_download_ydl_opts.py`:
+- video-тест переписан под новый селектор с дефолтом 720; добавлен
+  `max_height=1080`; добавлен тест, что 720 и 1080 дают **разные** height-фильтры
+  (параметр реально доезжает до селектора, а не принимается и теряется).
+- audio-тест — под `bestaudio[ext=m4a]/bestaudio/best`; добавлен тест, что AUDIO
+  **игнорирует** `max_height` (нет `height` в селекторе, 720 == 1080).
+- `"extractor_args"` убран из списка общих ключей; вместо него
+  `test_no_hardcoded_player_client_on_either_path` — регресс-гвард, чтобы
+  хардкод клиента не вернулся «как митигация 403» в третий раз.
 
-## Новые файлы
+`tests/unit/test_ytdlp_downloader.py`:
+- 5 monkeypatch-стендинов `_run_download_in_process` получили 7-й аргумент.
+- `test_download_forwards_default_max_height_to_child_runner` — argument-capture
+  на реально переданное значение (урок 11A.1: pass-through параметр с дефолтом
+  на каждом хопе может тихо перестать пробрасываться, и ни один тест не упадёт).
+- `test_preview_opts_pin_no_player_client` — тот же гвард для `_YDL_OPTS_PREVIEW`.
 
-- `src/domain/interfaces/progress_publisher.py` — `ProgressPublisherPort`.
-- `src/domain/value_objects/download_progress.py` — `DownloadProgress`
-  (частично из Day 11B; `+ phase: ProgressPhase = DOWNLOADING` в 11B.1).
-- `src/domain/value_objects/progress_phase.py` — **новое в 11B.1**:
-  `ProgressPhase(StrEnum)` — `DOWNLOADING` / `CONVERTING`.
-- `src/infrastructure/progress/redis_progress_publisher.py` —
-  `RedisProgressPublisher`: один JSON-payload на `umd:progress:<request_id>`
-  (percent/bytes/speed/eta/phase + chat_id/message_id/language).
-- `src/presentation/telegram/progress_listener.py` —
-  `TelegramProgressListener` (долгоживущий PSUBSCRIBE-слушатель в
-  bot-процессе) + `ProgressThrottler` (чистая debounce-логика).
-
-## Изменённые файлы
-
-- `src/infrastructure/downloader/ytdlp_downloader.py` — новая
-  `_translate_progress_status(status, format_kind) -> dict | None`:
-  чистая функция, вынесенная из `_record_progress` специально ради
-  юнит-тестируемости без реального дочернего процесса (Day 11B.1);
-  `_build_download_progress` — ветка для `{"phase": CONVERTING}` (пустой
-  снапшот, никаких byte-полей).
-- `src/application/use_cases/process_download.py` — без изменений в
-  11B.1: `_on_progress` уже прозрачно форвардит любой `DownloadProgress`
-  (включая converting-снапшоты) в `ProgressPublisherPort.publish`.
-- `locales/{ru,en}/messages.ftl` — `+ progress-converting`
-  («⏳ Конвертирую в MP3…» / «⏳ Converting to MP3…»).
-- `tests/unit/test_i18n.py` — **починка обнаруженного долга**:
-  `progress-downloading`/`progress-downloading-nostream` (Day 11B) не были
-  добавлены в CI-гвард `_REQUIRED_KEYS_SIMPLE`/`test_parametrized_keys_resolve`
-  вопреки заявлению в TASK_Day11B.md, что «существующий тест синхронности
-  подхватит» — не подхватывал. Добавлены все три `progress-*` ключа.
+`test_process_kill_mechanism.py` / `test_estimate_filesize.py` не менялись —
+`_wait_and_drain_progress` не тронут.
 
 ## Квалити-гейт
 
-`python -m pytest` (235/235), `python -m ruff check .`, `python -m mypy
---strict src` — все зелёные.
+`python -m pytest` (241/241), `python -m ruff check .`, `python -m mypy --strict src`
+— все зелёные.
 
-## Live-прогон (урок 9.1 — патч трогает worker + bot startup)
+## ⚠️ Перед бетой — лимит размера
 
-`docker compose build bot worker && docker compose up -d bot worker` —
-оба контейнера стартуют без крашей на новом коде. Реальные скачивания
-через `@Downloader_Media_U_bot`:
+**Выставить `MAX_DELIVERABLE_FILE_SIZE_MB=1500` в `.env`** (пользователь делает
+отдельно, код лимита в этом патче не тронут). Текущее значение рассчитывалось на
+360p; 1080p avc1 на проверенных роликах даёт 159–548 МБ, и на длинном видео
+упрётся в старый лимит — пользователь получит `error-too-large` вместо файла.
+Проверка размера проактивная (`extract_info(download=False)`, баг №5), так что
+это будет корректный отказ, а не битый файл — но всё равно отказ.
 
-- **video**: «⏳ Скачиваю… N%» до 100% → файл; статус «Конвертирую» НЕ
-  появляется (video не эмитит маркер).
-- **mp3**: «⏳ Скачиваю… 100%» → на границе download→transcode сменяется
-  на «⏳ Конвертирую в MP3…» (подтверждено визуально пользователем) → mp3
-  доезжает. `download_succeeded` для audio-запроса — с расширением
-  `.mp3` (FFmpegExtractAudio + post_hooks, баг №4 не нарушен).
+Локальный `.venv` при этом остаётся на yt-dlp 2026.07.04 (ниже нового пина) —
+гейт от этого не краснеет (версия нигде не ассертится, тесты не ходят в сеть),
+но локальный `pip install -e .` рассинхронизирован до пересборки образа.
 
-Логи подтверждают чистый проход обоих запросов (`process_download_succeeded`
-×2, ноль `progress_listener_*`-warning'ов, ноль трейсбеков).
+## Live-прогон (делает пользователь — урок 9.1, патч трогает образ)
 
-## ⚠️ Перед деплоем
+Не выполнен на момент этой заметки. План — в ответе Claude Code / см. ниже:
+пересборка `--no-cache`, проверка версии yt-dlp внутри образа, `yt-dlp -F` на
+контрольном ролике, end-to-end 720p и (временно подняв `_DEFAULT_MAX_HEIGHT`
+или дождавшись Этапа 2) 1080p через настоящего бота.
 
-Патч расширяет `download_job` (обязательные `chat_id`/`message_id` в
-payload) и переносит слушателя прогресса в bot-процесс. **Осушить
-(drain) очередь arq перед выкладкой**: любая уже поставленная задача со
-старым payload (без `chat_id`/`message_id`) несовместима с новым
-`download_job` и упадёт при разборе аргументов. Штатный способ — не
-принимать новые `/download` некоторое время, дождаться опустошения
-очереди (проверить, что in-flight задачи из старого деплоя добежали до
-конца — например по логам worker'а или по отсутствию активных job'ов),
-затем раскатывать новый образ.
+## Не входит в Этап 1
 
-## Не входит в 11B/11B.1 (Day 11C — согласовано, не начато)
-
-Качество формата видео (сейчас всегда 360p, `format 18`) и audio-only
-скачивание вместо полного muxed-потока — отдельный день с продуктовым
-обсуждением (качество по умолчанию, выбор пользователем, лимит размера
-vs 1080p). Подробности — HANDOFF.md → «Day 11C».
+Кнопки/меню выбора качества, `max_height` в домене и БД, миграция, изменения
+use cases и callback-данных — Этапы 2+.

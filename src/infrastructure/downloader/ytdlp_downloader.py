@@ -32,8 +32,8 @@ exception carries a semantic ``error_key``, never the diagnostic text
 to a localized message.
 
 **Day 11A — audio vs video.** ``download()`` now honours
-``options.format_kind``. VIDEO keeps the exact pre-Day-11 ydl_opts
-(``best[ext=mp4]/best`` + mp4 merge). AUDIO switches to ``bestaudio/best``
+``options.format_kind``. VIDEO downloads an mp4 (see Day 11C below for
+the current selector). AUDIO uses a bestaudio selector
 plus an ``FFmpegExtractAudio`` postprocessor that produces an mp3 — the
 system ffmpeg binary (already required, PROJECT_SPEC §2) does the
 transcode. The final filename still comes from ``post_hooks`` (bug #4):
@@ -77,6 +77,31 @@ forward it as a single ``DownloadProgress(phase=ProgressPhase.CONVERTING)``
 snapshot through the same queue/bridge/callback path as every other
 progress event — no second channel. VIDEO downloads never emit it: there
 is no user-visible "converting" step on that path.
+
+**Day 11C stage 1 — real quality instead of 360p.** Two independent
+causes made every video download come back as ``format 18`` (360p),
+diagnosed live in docker:
+
+1. The pinned yt-dlp (2026.07.04) predated YouTube's SABR rollout, so
+   the high formats it did list 403'd on download and only the single
+   combined 360p format worked. yt-dlp 2026.08.19 picks a working client
+   on its own (visionos at the time of writing) and fetches 1080p avc1.
+   Hence the hard version floor in pyproject.toml — this is a *runtime
+   correctness* pin, not a routine upgrade.
+2. Our own ``player_client=["android", "web"]`` override, originally a
+   403 mitigation, had itself become the cause: it pinned yt-dlp to
+   clients YouTube no longer serves full formats to. It is GONE from
+   both the download opts and ``_YDL_OPTS_PREVIEW``. Do not reintroduce
+   a hardcoded player_client — a stale one is worse than none, since
+   yt-dlp's own client selection is what keeps up with YouTube.
+
+The video selector now explicitly asks for separate video+audio streams
+(``bestvideo+bestaudio``), which is what the existing
+``merge_output_format: mp4`` was always there to reassemble — the old
+``best[ext=mp4]/best`` never requested them, so the merge had nothing to
+do. Height is capped by ``max_height`` (720 by default; stage 2 will let
+the user choose). ``vcodec^=avc1`` is deliberate and costs file size: it
+is what keeps the result playable inline in Telegram clients.
 """
 
 from __future__ import annotations
@@ -110,6 +135,12 @@ from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Default height cap for the video path. A module constant, not a
+# `DownloadOptions` field, on purpose: Day 11C stage 1 is the extraction
+# fix only — letting the user pick 720/1080 is stage 2, and it changes
+# exactly one thing, where this value comes from, not any signature.
+_DEFAULT_MAX_HEIGHT = 720
+
 _YDL_OPTS_PREVIEW: dict[str, Any] = {
     "quiet": True,
     "socket_timeout": 30,
@@ -117,15 +148,11 @@ _YDL_OPTS_PREVIEW: dict[str, Any] = {
     "no_warnings": True,
     "noplaylist": True,
     "skip_download": True,
-    # YouTube periodically tightens bot detection, which shows up as
-    # HTTP 403 during download (extract_info for preview is less
-    # affected — that's why /preview kept working while /download
-    # started failing). Requesting the android client is a common,
-    # best-effort mitigation, not a permanent fix: YouTube changes this
-    # regularly, and yt-dlp itself needs frequent updates to keep up.
-    # If 403s return, the first thing to try is `docker compose build
-    # --no-cache` to pull the latest yt-dlp, then revisit this.
-    "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+    # No `extractor_args`/`player_client` here by design — see the module
+    # docstring (Day 11C stage 1): the hardcoded android client was the
+    # cause of the 360p-only format list, not a mitigation for it. If
+    # 403s or missing formats appear again, update yt-dlp first
+    # (`docker compose build --no-cache`) — do not pin a client.
 }
 
 
@@ -151,22 +178,30 @@ def _build_download_ydl_opts(
     format_kind: FormatKind,
     post_hook: Any,
     progress_hook: Callable[[dict[str, Any]], None] | None = None,
+    max_height: int = _DEFAULT_MAX_HEIGHT,
 ) -> dict[str, Any]:
     """Assemble the ydl_opts for the real download.
 
     Day 11A: the ONLY difference between video and audio lives here — the
     ``format`` selector and (for audio) the ``FFmpegExtractAudio``
     postprocessor. Everything else (retries, timeouts, restrictfilenames,
-    the youtube extractor_args, post_hooks) is identical across both, so
-    it's built once and the format-specific keys are layered on top. This
-    keeps the two paths from drifting: a retry/timeout tweak applies to
-    both automatically.
+    post_hooks) is identical across both, so it's built once and the
+    format-specific keys are layered on top. This keeps the two paths
+    from drifting: a retry/timeout tweak applies to both automatically.
 
     Day 11B: ``progress_hook`` (optional, defaults to no hook at all) is
     yt-dlp's own ``progress_hooks`` mechanism — distinct from
     ``post_hook``/``post_hooks``, which fires once at the very end.
     Defaulting to None (rather than requiring every caller to pass one)
     keeps the existing direct tests of this function unchanged.
+
+    Day 11C stage 1: ``max_height`` caps the video path's resolution and
+    is ignored on the audio path. It is the LAST parameter, after
+    ``progress_hook``, rather than next to the other format inputs, so
+    that existing positional call sites keep meaning what they say —
+    slotting an int between ``format_kind`` and ``post_hook`` would
+    silently rebind ``post_hook`` (typed ``Any``, so nothing would catch
+    it).
     """
     ydl_opts: dict[str, Any] = {
         "quiet": True,
@@ -178,7 +213,6 @@ def _build_download_ydl_opts(
         "retries": 10,
         "fragment_retries": 10,
         "continuedl": True,
-        "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
         "post_hooks": [post_hook],
         "progress_hooks": [progress_hook] if progress_hook is not None else [],
     }
@@ -187,7 +221,11 @@ def _build_download_ydl_opts(
         # bestaudio, then transcode to mp3 via the system ffmpeg. The
         # postprocessor rewrites the extension; post_hooks reports the
         # real .mp3 path afterwards (bug #4), so no filename prediction.
-        ydl_opts["format"] = "bestaudio/best"
+        # `[ext=m4a]` first: prefer a real audio-only track over whatever
+        # bare `bestaudio` resolves to, so we don't pull a full muxed
+        # stream just to throw the video away in ffmpeg. `max_height` is
+        # deliberately absent — there is no video stream to cap.
+        ydl_opts["format"] = "bestaudio[ext=m4a]/bestaudio/best"
         ydl_opts["postprocessors"] = [
             {
                 "key": "FFmpegExtractAudio",
@@ -196,8 +234,21 @@ def _build_download_ydl_opts(
             }
         ]
     else:
-        # Unchanged pre-Day-11 video behaviour.
-        ydl_opts["format"] = "best[ext=mp4]/best"
+        # Day 11C stage 1 — see the module docstring for the full
+        # diagnosis. Ask for separate streams first (that's what
+        # merge_output_format below was always for; the old
+        # `best[ext=mp4]/best` never requested them, which is why every
+        # download came back as the single combined 360p format 18).
+        # `vcodec^=avc1` costs file size and is kept on purpose: it is
+        # what makes the result play inline in Telegram clients. The
+        # remaining fallbacks degrade gracefully — capped combined, then
+        # any mp4, then anything at all — so a source without avc1 or
+        # without separate tracks still downloads.
+        ydl_opts["format"] = (
+            f"bestvideo[height<={max_height}][vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]"
+            f"/best[ext=mp4][height<={max_height}]"
+            f"/best[ext=mp4]/best"
+        )
         ydl_opts["merge_output_format"] = "mp4"
 
     if max_filesize_bytes:
@@ -317,6 +368,7 @@ def _download_worker_entrypoint(
     format_kind_value: str,
     result_queue: multiprocessing.Queue[tuple[str, str]],
     progress_queue: multiprocessing.Queue[dict[str, Any]],
+    max_height: int = _DEFAULT_MAX_HEIGHT,
 ) -> None:
     """Entrypoint for the child process. This is the isolation boundary —
     everything yt-dlp/ffmpeg does happens here, in a process that can be
@@ -337,6 +389,10 @@ def _download_worker_entrypoint(
     ``{"phase": ProgressPhase.CONVERTING}`` — it carries no byte/percent
     data, just the boundary signal. VIDEO downloads still discard it:
     there's no ffmpeg transcode step on that path worth announcing.
+
+    Day 11C stage 1: ``max_height`` crosses the boundary as a plain int
+    (pickle-safe, like ``format_kind_value``) and goes straight into
+    ``_build_download_ydl_opts``.
     """
     try:
         # `post_hooks` is yt-dlp's own documented mechanism for exactly
@@ -363,6 +419,7 @@ def _download_worker_entrypoint(
             format_kind=format_kind,
             post_hook=_record_final_filename,
             progress_hook=_record_progress,
+            max_height=max_height,
         )
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -566,6 +623,7 @@ def _run_download_in_process(
     timeout_seconds: int,
     format_kind_value: str,
     progress_sink: Callable[[dict[str, Any] | None], None] | None = None,
+    max_height: int = _DEFAULT_MAX_HEIGHT,
 ) -> str:
     """Blocking. Must only be called via loop.run_in_executor() — never
     directly on the event loop thread. The blocking work here
@@ -575,13 +633,25 @@ def _run_download_in_process(
     Day 11B: sends a final `progress_sink(None)` in a `finally` — see
     `_drain_bridge`'s docstring for why THIS function (not `download()`)
     must be the one to signal "no more progress events are coming".
+
+    Day 11C stage 1: `max_height` is forwarded verbatim into the child's
+    args tuple. Nothing about the timeout/terminate contract in
+    `_wait_and_drain_progress` changes.
     """
     ctx = multiprocessing.get_context("spawn")
     result_queue: multiprocessing.Queue[tuple[str, str]] = ctx.Queue()
     progress_queue: multiprocessing.Queue[dict[str, Any]] = ctx.Queue()
     process = ctx.Process(
         target=_download_worker_entrypoint,
-        args=(url, output_dir, max_filesize_bytes, format_kind_value, result_queue, progress_queue),
+        args=(
+            url,
+            output_dir,
+            max_filesize_bytes,
+            format_kind_value,
+            result_queue,
+            progress_queue,
+            max_height,
+        ),
     )
     process.start()
 
@@ -700,6 +770,9 @@ class YtDlpDownloader:
                 options.timeout_seconds,
                 options.format_kind.value,
                 progress_sink,
+                # Stage 2 replaces this constant with a user-chosen value
+                # off `options`; the plumbing below it stays as-is.
+                _DEFAULT_MAX_HEIGHT,
             )
         except _DownloadTimeoutError as exc:
             logger.warning("download_failed", url=url, error=str(exc), reason="timeout")

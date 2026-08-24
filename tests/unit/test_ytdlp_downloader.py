@@ -21,6 +21,12 @@ again, same reasoning (they test exception mapping, which doesn't depend
 on progress reporting). New tests below cover ``_build_download_progress``
 and the progress_callback → progress_sink wiring itself, capturing actual
 arguments rather than asserting a bare mock was called (lesson 11A.1).
+
+Day 11C stage 1: ``_run_download_in_process`` gained a seventh positional
+argument (``max_height``) — the same stand-ins updated once more, plus a
+dedicated argument-capture test that the value actually reaches it
+(lesson 11A.1: a plumbing parameter nobody asserts on is a parameter that
+can silently stop being forwarded).
 """
 
 from __future__ import annotations
@@ -128,7 +134,13 @@ async def test_download_returns_path_on_success(monkeypatch: pytest.MonkeyPatch,
     expected_path = str(tmp_path / "video.mp4")
 
     def _fake_run(
-        url, output_dir, max_filesize_bytes, timeout_seconds, format_kind_value, progress_sink
+        url,
+        output_dir,
+        max_filesize_bytes,
+        timeout_seconds,
+        format_kind_value,
+        progress_sink,
+        max_height,
     ):
         return expected_path
 
@@ -152,6 +164,7 @@ async def test_download_maps_timeout_to_timeout_error(
         timeout_seconds: int,
         format_kind_value: str,
         progress_sink: object,
+        max_height: int,
     ) -> str:
         raise ytdlp_downloader._DownloadTimeoutError("превысило лимит 1 секунд")
 
@@ -179,6 +192,7 @@ async def test_download_maps_process_error_to_extraction_error(
         timeout_seconds: int,
         format_kind_value: str,
         progress_sink: object,
+        max_height: int,
     ) -> str:
         # This diagnostic-rich message must NOT leak into the raised
         # exception's text (it may contain container paths, signed CDN
@@ -212,6 +226,7 @@ async def test_download_maps_file_too_large_to_categorized_error(
         timeout_seconds: int,
         format_kind_value: str,
         progress_sink: object,
+        max_height: int,
     ) -> str:
         # Day 10: the internal error carries the numbers, not a pre-baked
         # (hardcoded-language) sentence.
@@ -339,6 +354,7 @@ async def test_download_wires_progress_callback_through_to_domain(
         timeout_seconds: int,
         format_kind_value: str,
         progress_sink,
+        max_height: int,
     ) -> str:
         assert progress_sink is not None
         progress_sink({"downloaded_bytes": 10, "total_bytes": 100, "speed": 5.0, "eta": 9})
@@ -381,6 +397,7 @@ async def test_download_without_progress_callback_passes_none_sink(
         timeout_seconds: int,
         format_kind_value: str,
         progress_sink,
+        max_height: int,
     ) -> str:
         captured["progress_sink"] = progress_sink
         return expected_path
@@ -394,3 +411,53 @@ async def test_download_without_progress_callback_passes_none_sink(
     await downloader.download("https://example.com/video", options)
 
     assert captured["progress_sink"] is None
+
+
+# --- Day 11C stage 1: quality plumbing ---------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_download_forwards_default_max_height_to_child_runner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """`max_height` is a pass-through parameter with a default at every
+    hop, which is exactly the kind of plumbing that can quietly stop
+    being forwarded without any test failing (lesson 11A.1). So capture
+    the actual argument `download()` passes, not just that it ran.
+
+    Stage 1 has no user-facing choice yet — the value is the module
+    default. Stage 2 changes only where it comes from.
+    """
+    expected_path = str(tmp_path / "video.mp4")
+    captured: dict[str, Any] = {}
+
+    def _fake_run_download_in_process(
+        url: str,
+        output_dir: str,
+        max_filesize_bytes: int | None,
+        timeout_seconds: int,
+        format_kind_value: str,
+        progress_sink,
+        max_height: int,
+    ) -> str:
+        captured["max_height"] = max_height
+        return expected_path
+
+    monkeypatch.setattr(
+        ytdlp_downloader, "_run_download_in_process", _fake_run_download_in_process
+    )
+
+    downloader = YtDlpDownloader()
+    options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60)
+    await downloader.download("https://example.com/video", options)
+
+    assert captured["max_height"] == 720
+    assert captured["max_height"] == ytdlp_downloader._DEFAULT_MAX_HEIGHT
+
+
+def test_preview_opts_pin_no_player_client() -> None:
+    """Same regression guard as the download path (see
+    test_download_ydl_opts.py): the preview extractor must not pin a
+    youtube client either — a stale one hides formats.
+    """
+    assert "extractor_args" not in ytdlp_downloader._YDL_OPTS_PREVIEW
