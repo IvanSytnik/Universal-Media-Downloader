@@ -1,4 +1,4 @@
-"""Day 11C.1: the read path never lets a bad stored value escape as a
+"""Day 11C.3: the read path never lets a bad stored value escape as a
 bare ValueError.
 
 Before this, ``_to_entity`` built every enum with its bare constructor.

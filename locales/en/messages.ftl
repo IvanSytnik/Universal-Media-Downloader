@@ -97,7 +97,7 @@ error-timeout = The download took too long and was aborted. Please try again.
 error-too-large = This video is too large for Telegram (~{ $estimated_mb } MB, limit { $limit_mb } MB).
 # Delivery (downloaded but couldn't send) — worker path.
 error-delivery-failed = I downloaded the video but couldn't send it to Telegram. Please try again later.
-# Internal failure on our side (Day 11C.1): a database row is unreadable.
+# Internal failure on our side (Day 11C.3): a database row is unreadable.
 # Nothing for the user to act on, so keep it short and free of
 # diagnostics (bug #6) — those go to the log.
 error-internal = Something broke on my side. Please try again — if it keeps happening, send the link once more.

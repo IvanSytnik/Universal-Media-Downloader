@@ -1,4 +1,4 @@
-"""Day 11C.1: the worker reports an unreadable row instead of dying on it.
+"""Day 11C.3: the worker reports an unreadable row instead of dying on it.
 
 This is the read-side half of the hardening — test_corrupted_record.py
 covers the parsing policy, this covers what the worker DOES with it.

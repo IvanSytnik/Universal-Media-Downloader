@@ -34,7 +34,7 @@ closing over the already-loaded ``request``/``user`` and hands it to
 ``DownloadProgress`` to ``ProgressPublisherPort.publish`` with the
 routing/locale extras attached. No new DB reads on the progress path.
 
-Day 11C.1 — the load itself can now fail *reportably*. Reading a row
+Day 11C.3 — the load itself can now fail *reportably*. Reading a row
 whose stored status is unreadable raises ``CorruptedRecordError`` from
 ``get_by_id``, i.e. before ``request`` exists — so the normal failure
 path (mark the entity failed, notify) is unavailable: there is no
