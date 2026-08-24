@@ -28,6 +28,14 @@ the enum itself:
   it raises ``CorruptedRecordError``, which the worker handles like any
   other categorized failure.
 
+That exception is correct for ``get_by_id`` — one unreadable row means
+that one request cannot be processed. It is NOT correct for
+``list_by_user``: a listing is a set of independent rows, and letting one
+corrupt row abort the whole query would hide every healthy request the
+user has. So the listing SKIPS unreadable rows (loudly, in the log) and
+returns the rest. Same data, two different right answers, because the
+blast radius differs.
+
 No CHECK constraint backs this up on the database side, deliberately:
 the application is the only writer, so a constraint would only restate
 what the writer already guarantees, while the read path needs this
@@ -170,6 +178,15 @@ class SqlAlchemyDownloadRequestRepository:
         await self._session.flush()
 
     async def list_by_user(self, user_id: UUID, limit: int = 20) -> list[DownloadRequest]:
+        """Rows the user can be shown. Unreadable ones are skipped, not
+        fatal — see the module docstring for why this differs from
+        ``get_by_id``.
+
+        Skipping is logged at error level with the row id: silently
+        returning a short list would make a corrupt row invisible
+        forever, and "my history is missing an item" is close to
+        undebuggable without that line.
+        """
         stmt = (
             select(DownloadRequestModel)
             .where(DownloadRequestModel.user_id == user_id)
@@ -177,4 +194,17 @@ class SqlAlchemyDownloadRequestRepository:
             .limit(limit)
         )
         result = await self._session.execute(stmt)
-        return [_to_entity(model) for model in result.scalars().all()]
+
+        entities: list[DownloadRequest] = []
+        for model in result.scalars().all():
+            try:
+                entities.append(_to_entity(model))
+            except CorruptedRecordError as exc:
+                logger.error(
+                    "download_request_skipped_in_listing",
+                    request_id=str(exc.request_id),
+                    user_id=str(exc.user_id),
+                    column=exc.column,
+                    raw_value=exc.raw_value,
+                )
+        return entities
