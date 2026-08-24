@@ -9,7 +9,7 @@ every state transition would be pointless churn.
 Day 11C: ``quality_kind`` follows exactly the same rule (mapped on read
 and on create, never on update).
 
-Day 11C.1 — READ-SIDE HARDENING. ``_to_entity`` used to build every enum
+Day 11C.3 — READ-SIDE HARDENING. ``_to_entity`` used to build every enum
 with its bare constructor (``MediaType(row.media_type)`` etc.). A value
 this build doesn't recognize — a rolling deploy where the previous
 version wrote a newer member, or a hand-edited row — made that raise

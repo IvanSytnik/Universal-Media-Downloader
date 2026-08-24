@@ -15,45 +15,36 @@ import pytest
 from aiogram_i18n.cores import FluentRuntimeCore
 
 from src.application.use_cases.process_download import ProcessDownloadUseCase
+from src.domain.entities.download_request import DownloadRequest
 from src.domain.exceptions import (
     ExtractionError,
     FileTooLargeError,
     PrivateContentError,
     UnsupportedURLError,
 )
-from src.domain.value_objects.format_kind import FormatKind
-from src.domain.value_objects.quality_kind import QualityKind
 from src.infrastructure.localization.fluent_error_localizer import FluentErrorLocalizer
 from src.presentation.telegram.i18n import DEFAULT_LOCALE, create_i18n_core
 
 
-class _Request:
-    def __init__(self, user_id: UUID) -> None:
-        self.id = uuid4()
-        self.user_id = user_id
-        self.source_url = "https://example.com/x"
-        self.status = "pending"
-        # Day 11A leftover bug: this fake was never given format_kind
-        # after ProcessDownloadUseCase started reading request.format_kind
-        # (11A.1 hotfix) — DownloadOptions construction blew up with
-        # AttributeError. Fixed here as part of Day 11B (touches this
-        # use case's execute() signature anyway).
-        self.format_kind = FormatKind.VIDEO
-        # Day 11C stage 3: same again for quality_kind. A hand-rolled
-        # fake of an entity has to be updated every time the entity grows
-        # a field the use case reads — it failed loudly here (AttributeError
-        # in every test of this module), which is the good outcome: the
-        # 11A.1 version of this gap was silent in production instead.
-        self.quality_kind = QualityKind.HD_720
+def _make_request(user_id: UUID) -> DownloadRequest:
+    """The REAL entity, not a look-alike.
 
-    def mark_processing(self) -> None:
-        self.status = "processing"
+    This used to be a hand-rolled ``_Request`` class duplicating the
+    entity's fields and state methods, and it was a slow-motion repeat of
+    11A.1: every time the entity grew a field the use case reads, the
+    stand-in silently described a DownloadRequest that no longer exists.
+    It happened twice — ``format_kind`` (11A.1) and ``quality_kind``
+    (11C stage 3). Both times it surfaced as AttributeError only because
+    the use case reads the new field immediately; a field added for a
+    later consumer would have diverged quietly, which is exactly the
+    class of bug this module is supposed to guard against.
 
-    def mark_failed(self) -> None:
-        self.status = "failed"
-
-    def mark_done(self) -> None:
-        self.status = "done"
+    Using the real entity means the compiler-ish checks (mypy) and the
+    entity's own defaults keep these tests honest for free: a new field
+    arrives already correct here, and a field REMOVED from the entity
+    breaks loudly instead of lingering in a fake.
+    """
+    return DownloadRequest.create(user_id=user_id, source_url="https://example.com/x")
 
 
 class _User:
@@ -64,15 +55,20 @@ class _User:
 
 
 class _RequestRepo:
-    def __init__(self, request: _Request) -> None:
+    def __init__(self, request: DownloadRequest) -> None:
         self._request = request
         self.updated: list[str] = []
 
-    async def get_by_id(self, request_id: UUID) -> _Request:
+    async def get_by_id(self, request_id: UUID) -> DownloadRequest:
         return self._request
 
-    async def update(self, request: _Request) -> None:
+    async def update(self, request: DownloadRequest) -> None:
+        # DownloadStatus is a StrEnum, so the recorded values compare
+        # equal to the plain strings the assertions below use.
         self.updated.append(request.status)
+
+    async def mark_failed_by_id(self, request_id: UUID) -> None:  # pragma: no cover
+        return None
 
 
 class _UserRepo:
@@ -131,7 +127,7 @@ async def localizer() -> FluentErrorLocalizer:
 
 async def _run(exc: Exception, language: str | None, localizer: FluentErrorLocalizer) -> str:
     user = _User(language)
-    request = _Request(user.id)
+    request = _make_request(user.id)
     notifier = _CapturingNotifier()
     use_case = ProcessDownloadUseCase(
         download_request_repository=_RequestRepo(request),
