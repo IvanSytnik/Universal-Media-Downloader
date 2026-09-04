@@ -1,357 +1,356 @@
-# Universal Media Downloader — Project Specification (v2)
+# Universal Media Downloader
 
-> Переработанная версия исходного набора документов. Цель правки — убрать внутренние противоречия,
-> закрыть архитектурные пробелы, которые приводят к застою и переделкам, и дать чёткие,
-> проверяемые критерии "готово" на каждом этапе.
+A production-grade Telegram bot that downloads media from YouTube, TikTok, Instagram, X/Twitter and VK via `yt-dlp` — built as the core of a future SaaS platform rather than as a single-file script.
 
----
-
-## 1. Vision & Goal
-
-Production-ready Telegram-бот для скачивания медиа с поддерживаемых сайтов через yt-dlp,
-спроектированный как ядро будущей SaaS-платформы, а не как одноразовый скрипт.
-
-**Важное уточнение относительно "поддержать всё с первого дня":**
-это требование применяется к **границам модулей и контрактам** (интерфейсы, Dependency Injection,
-разделение слоёв), а НЕ к реализации фич, которые не нужны прямо сейчас.
-
-Правило: *"Проектируй границы так, чтобы Web/API/Mobile могли появиться без переписывания домена.
-Не пиши код для Web/API/Mobile, пока не наступила их фаза."*
-
-Это разрешает исходное противоречие между "support all from day one" и YAGNI из Coding Style —
-без этого уточнения проект обречён либо на паралич анализа, либо на overengineering.
-
-Юридический контекст: скачивание медиа с YouTube/Instagram/TikTok и т.д. затрагивает ToS
-платформ и вопросы авторских прав. До запуска монетизации (Premium/Ads) продукт должен иметь
-явную политику использования, ограничения по источникам и процесс реакции на жалобы
-правообладателей. Это не блокирует разработку, но должно быть зафиксировано в Roadmap
-до Phase "Monetization".
+The interesting part of this project is not the download itself. It is everything around it: keeping a blocking, crash-prone third-party library isolated from an asyncio event loop, delivering files larger than Telegram's 50 MB limit, streaming real-time progress across process boundaries, and keeping the domain layer free of any knowledge that Telegram exists.
 
 ---
 
-## 2. Tech Stack
+## Overview
 
-| Категория | Технология | Примечание |
+**Problem.** Telegram media downloader bots typically collapse under three constraints: `yt-dlp` is synchronous and can hang indefinitely; the Bot API rejects files over 50 MB; and long downloads leave the user staring at a silent chat.
+
+**Approach.** Each constraint is solved architecturally, not patched:
+
+| Constraint | Solution |
+|---|---|
+| `yt-dlp` blocks and can hang | Each download runs in a dedicated OS process (`multiprocessing.Process`), killed by `terminate()` on timeout — a thread cannot be safely killed, a process can |
+| 50 MB upload limit | A self-hosted `telegram-bot-api` container sharing a Docker volume with the worker, raising the ceiling to 2000 MB |
+| No feedback during long downloads | `progress_hooks` → inter-process queue → Redis pub/sub → a long-lived listener in the bot process edits the message, throttled |
+| Downloader must not know about Telegram | Progress leaves the downloader as a domain value object through a port; only the presentation layer converts it into an `editMessageText` call |
+
+**Audience.** Telegram users who want video or MP3 from a link, with a two-step confirmation flow and localized interface (ru/en).
+
+**Status.** Working end to end: preview → format choice → quality choice → download → delivery, with real-time progress and categorized, localized error messages. 314 tests, `ruff` and `mypy --strict` clean.
+
+---
+
+## Key Features
+
+- **Two-phase download flow.** `extract_info(download=False)` produces a preview card (title, duration, thumbnail) before a single byte is downloaded — the user confirms, and only then does a worker job get queued.
+- **Format selection.** Video (MP4) or audio (MP3 via `FFmpegExtractAudio`), chosen with inline buttons under the preview.
+- **Quality selection.** Two-step keyboard: Video → 720p / 1080p, encoded in the callback payload and persisted as a domain property.
+- **Large file delivery.** Optional self-hosted Bot API server lifts the upload limit from 50 MB to 2000 MB.
+- **Real-time progress.** Percentage, speed and ETA pushed from the download subprocess to the chat message, with throttling to stay within Telegram rate limits.
+- **Categorized errors.** `yt-dlp` failures are classified into seven domain exception types (private, geo-blocked, age-restricted, unavailable, unsupported media, timeout, too large). The user sees a short localized sentence; the raw diagnostic goes to the structured log only.
+- **Internationalization.** Every user-facing string lives in Fluent `.ftl` files (ru/en) with Russian plural forms and a manual `/language` switch.
+- **Rate limiting.** Redis sliding-window counters (ZSET), applied per Telegram user at the presentation boundary — separate limits for previews and downloads.
+- **Domain allowlist.** URLs are validated against a configurable suffix-match allowlist before reaching the application layer.
+
+---
+
+## Tech Stack
+
+| Layer | Technology | Purpose |
 |---|---|---|
-| Язык | Python 3.13 | |
-| Telegram | aiogram 3 | async-native |
-| API | FastAPI | Phase 5 |
-| Downloader | yt-dlp | блокирующая библиотека — см. §6 |
-| Медиа | FFmpeg | вызывается как subprocess, не библиотека |
-| ORM | SQLAlchemy 2 (async) | |
-| Миграции | Alembic | |
-| БД | PostgreSQL | |
-| Кэш / брокер | Redis | |
-| **Task Queue** | **arq** | async-native, работает на Redis, совместим с asyncio-стеком aiogram/FastAPI. Альтернатива — Dramatiq, но он синхронный по умолчанию и потребует лишний слой адаптации |
-| Контейнеризация | Docker, Docker Compose | |
-| Тесты | pytest, pytest-asyncio, testcontainers | |
-| CI/CD | GitHub Actions | |
-| Наблюдаемость | structlog, Prometheus, Grafana | |
-| Reverse proxy | Nginx | |
-| Пакетный менеджер | uv | |
-| **JS-рантайм** | **deno** (рекомендуется yt-dlp) | Требуется для `yt-dlp-ejs` — без него полноценная поддержка YouTube деградирует. Обязателен в Docker-образе воркера |
-
-**Важно про ffmpeg:** нужен системный бинарник `ffmpeg`/`ffprobe` (apt/системный пакет),
-а НЕ одноимённый pip-пакет с PyPI — это частая ошибка, которая молча ничего не скачивает.
-
-**Решение, требующее фиксации:** task queue выбран — **arq**. Это архитектурное решение первого
-уровня, влияет на модель воркеров, деплой и способ передачи прогресса скачивания. Если позже
-появится причина сменить (например, нужны сложные workflow/retries как в Celery) — это отдельное
-обсуждение с explicit tradeoffs, а не смена "по ходу".
+| Language | Python 3.13 | `from __future__ import annotations`, modern typing throughout |
+| Telegram | aiogram 3 | Async-native bot framework; FSM on Redis storage |
+| Download engine | yt-dlp (`>=2026.08.19`) | Native Python API (`YoutubeDL`), not a CLI wrapper |
+| Media processing | FFmpeg | System binary; MP4 merge and MP3 extraction |
+| JS runtime | Deno | Required by `yt-dlp-ejs` — YouTube metadata extraction degrades without it |
+| Task queue | arq | Async-native, Redis-backed; matches the asyncio stack without an adapter layer |
+| Database | PostgreSQL 16 | Via SQLAlchemy 2 (async) + asyncpg |
+| Migrations | Alembic | Applied on bot container startup |
+| Cache / broker / pub-sub | Redis 7 | FSM storage, arq broker, rate limiter, progress channel, preview context |
+| i18n | aiogram-i18n + fluent.runtime | FTL locale files, missing key = hard error |
+| Config | pydantic-settings | Single source of truth, `SecretStr` for credentials |
+| Logging | structlog | Structured logs over the stdlib logger factory |
+| Testing | pytest, pytest-asyncio, aiosqlite | 314 tests; repositories tested against SQLite |
+| Quality | ruff, mypy (strict) | Enforced in CI |
+| Infrastructure | Docker, Docker Compose | Five services, health-checked |
+| CI | GitHub Actions | Lint → type check → test on every push and PR to `main` |
 
 ---
 
-## 3. Архитектура
+## Architecture
 
-Исходная диаграмма смешивала два разных измерения (слои кода и поток обработки запроса).
-Разделяем на два документа.
-
-### 3.1 Layered Architecture (статическая структура, кто от кого зависит)
+Clean Architecture with an enforced dependency rule. The domain layer imports nothing from the outside; infrastructure implements domain-declared ports; presentation calls application use cases and never touches infrastructure directly.
 
 ```
 Presentation  →  Application  →  Domain  ←  Infrastructure
 ```
 
-Правило зависимостей (Dependency Rule):
-- **Domain** ни от чего не зависит. Только сущности, value objects, интерфейсы (`Downloader`,
-  `Repository`, `Storage`, `Notifier`).
-- **Application** зависит только от Domain. Здесь use cases (`RequestDownloadUseCase`,
-  `GetHistoryUseCase`) и DTO.
-- **Infrastructure** реализует интерфейсы Domain (yt-dlp adapter, SQLAlchemy repo, Redis queue,
-  S3 storage). Зависит от Domain, но Domain о ней не знает.
-- **Presentation** (Telegram handlers, REST-роуты, admin) вызывает Application use cases.
-  Никогда не обращается к Infrastructure напрямую и не содержит бизнес-логику.
+The critical insight in this codebase: **the Telegram handler and the arq worker are two entrypoints into the same application layer**, not two parallel systems. A handler validates input and enqueues; a worker dequeues and executes. Both call use cases.
 
-### 3.2 Request Flow (поток обработки конкретного скачивания)
+```mermaid
+flowchart TB
+    U[Telegram user] --> H[aiogram handlers<br/>Presentation]
+    H --> PU[PreviewDownloadUseCase]
+    H --> RU[RequestDownloadUseCase]
+    PU --> D
+    RU --> DB[(PostgreSQL<br/>DownloadRequest)]
+    RU --> Q[arq queue on Redis]
 
+    Q --> W[arq worker process]
+    W --> PD[ProcessDownloadUseCase]
+    PD --> DB
+    PD --> D[YtDlpDownloader]
+    D --> CP[child OS process<br/>yt-dlp + FFmpeg]
+    CP -.progress via IPC queue.-> D
+    D -.DownloadProgress.-> PD
+    PD --> PP[RedisProgressPublisher]
+    PP -.pub/sub.-> PL[Progress listener<br/>in bot process]
+    PL --> U
+    PD --> S[LocalFileStorage]
+    PD --> N[TelegramNotifier]
+    N --> BA[telegram-bot-api<br/>local server]
+    BA --> U
 ```
-Telegram Update
-   → Handler (Presentation, тонкий, только валидация ввода + вызов use case)
-      → RequestDownloadUseCase (Application)
-         → создаёт DownloadRequest (Domain entity), кладёт в очередь (arq)
-   → Worker (Infrastructure entrypoint)
-      → DownloaderPort.download() (реализация — yt-dlp adapter)
-      → FFmpeg (при необходимости конвертации)
-      → StoragePort.save() (временное хранилище / S3)
-   → NotifierPort.notify() → Telegram отправляет файл пользователю
-```
 
-Handler и Worker — это два разных **entrypoint** одного и того же Application-слоя, а не два
-самостоятельных архитектурных потока. Это ключевое отличие от исходной формулировки.
+### Ports defined by the domain
+
+`DownloaderPort`, `StoragePort`, `NotifierPort`, `TaskQueuePort`, `UserRepositoryPort`, `DownloadRequestRepositoryPort`, `RateLimiterPort`, `PreviewContextStorePort`, `ErrorLocalizerPort`, `ProgressPublisherPort`.
+
+Every one of these has exactly one infrastructure implementation today and could gain a second (S3 storage, a REST notifier, a gallery-dl downloader) without touching the domain or application layers.
+
+### Data flow of one download
+
+1. User sends a URL. The handler validates it against the domain allowlist and checks the Redis rate limiter.
+2. `PreviewDownloadUseCase` calls `extract_info(download=False)`; the URL is stored in Redis under a short-lived token, and a preview card is rendered with format buttons.
+3. The user picks video/MP3 and, for video, a quality tier. The callback payload carries the token plus the choice.
+4. `RequestDownloadUseCase` persists a `DownloadRequest` entity (with `format_kind` and `quality_kind`) and enqueues a job carrying only the request id plus the message coordinates for progress rendering.
+5. The worker's `ProcessDownloadUseCase` reloads the entity from the database, builds `DownloadOptions`, and calls the downloader.
+6. `YtDlpDownloader` spawns a child process. Progress hooks push updates through an inter-process queue; the parent drains them into Redis pub/sub. A timeout triggers `terminate()`.
+7. On success the file path is resolved from `post_hooks` (the only reliable source after an FFmpeg merge or transcode), delivered through the notifier, and cleaned up.
 
 ---
 
-## 4. Folder Structure
+## Project Structure
 
-Исходная структура (`bot/ api/ worker/ core/ services/ ...`) делит код по типу процесса,
-а не по архитектурным слоям — это приводит к тому, что `core/` и `services/` со временем
-превращаются в "мусорный ящик". Заменяется на деление по слоям:
+```text
+umd/
+├── src/
+│   ├── domain/                  # No outbound dependencies
+│   │   ├── entities/            # User, DownloadRequest
+│   │   ├── value_objects/       # FormatKind, QualityKind, MediaType,
+│   │   │                        #   DownloadOptions, DownloadProgress,
+│   │   │                        #   MediaPreview, url_validation
+│   │   ├── interfaces/          # All ports
+│   │   └── exceptions.py        # Domain errors, each carrying an error_key
+│   ├── application/use_cases/   # RegisterUser, PreviewDownload,
+│   │                            #   RequestDownload, ProcessDownload
+│   ├── infrastructure/
+│   │   ├── downloader/          # yt-dlp adapter + error classifier
+│   │   ├── database/            # SQLAlchemy models, async repositories
+│   │   ├── queue/               # arq worker settings and jobs
+│   │   ├── storage/             # Local file storage with TTL cleanup
+│   │   ├── notifier/            # Telegram file delivery
+│   │   ├── progress/            # Redis pub/sub publisher
+│   │   ├── rate_limit/          # Redis sliding-window limiter
+│   │   ├── preview_context/     # Token → URL, Redis, atomic GETDEL
+│   │   └── localization/        # Fluent localizer for the worker path
+│   ├── presentation/telegram/   # Thin handlers, keyboards, formatting,
+│   │                            #   i18n middleware, progress listener
+│   ├── config/settings.py       # pydantic-settings, single source of truth
+│   ├── shared/logging.py        # structlog configuration
+│   └── main.py                  # Bot entrypoint
+├── locales/{ru,en}/messages.ftl # Every user-facing string
+├── infra/
+│   ├── alembic/versions/        # 0001_initial … 0004_quality_kind
+│   └── docker/                  # bot.Dockerfile, entrypoint.sh
+├── tests/
+│   ├── unit/                    # Domain, application, presentation logic
+│   └── integration/             # Repositories against SQLite
+├── docker-compose.yml
+└── pyproject.toml
+```
 
-```
-src/
-├── domain/
-│   ├── entities/          # User, DownloadRequest, Subscription...
-│   ├── interfaces/        # DownloaderPort, RepositoryPort, StoragePort, NotifierPort
-│   ├── value_objects/
-│   └── exceptions/
-├── application/
-│   ├── use_cases/         # RequestDownloadUseCase, GetHistoryUseCase...
-│   └── dto/
-├── infrastructure/
-│   ├── downloader/        # yt-dlp adapter
-│   ├── database/          # SQLAlchemy models, repositories, Alembic
-│   ├── queue/              # arq integration
-│   └── storage/            # local tmp storage / S3 adapter
-├── presentation/
-│   ├── telegram/           # aiogram handlers — тонкие
-│   ├── rest_api/            # FastAPI routers (с Phase 5)
-│   └── admin/                # с Phase 4
-├── workers/                  # entrypoints процессов-воркеров (arq worker settings)
-├── config/                    # Pydantic Settings, env-loading
-└── shared/                     # логирование, кастомные типы, без бизнес-логики
-tests/
-    ├── unit/                   # domain + application, без внешних зависимостей
-    ├── integration/            # infrastructure, через testcontainers
-    └── contract/                # presentation, smoke/contract-тесты
-infra/                            # docker, nginx, ci-конфиги, alembic env
-scripts/
-docs/
-```
+The layout deliberately splits by architectural layer rather than by process type. A `bot/ worker/ core/ services/` split — the obvious alternative — reliably degrades into `core/` and `services/` becoming dumping grounds, and it makes the dependency rule impossible to check by reading an import statement.
 
 ---
 
-## 5. Доменная модель (черновая, Phase 1)
+## Getting Started
 
-Исходная документация не содержала ни одной сущности — без этого нельзя закрыть Phase 1
-("Database"). Минимальный набор для старта:
+### Prerequisites
 
-- **User** — `id`, `telegram_id` (nullable, один из способов входа, НЕ первичный ключ —
-  см. §6 про мультиклиентность), `created_at`, `is_premium`.
-- **DownloadRequest** — `id`, `user_id`, `source_url`, `status` (pending/processing/done/failed),
-  `media_type`, `created_at`, `completed_at`.
-- **DownloadHistory** — производная от DownloadRequest (или тот же объект с историческим статусом).
+- Docker and Docker Compose
+- A bot token from [@BotFather](https://t.me/BotFather)
+- Optional, for files above 50 MB: an `api_id` / `api_hash` pair from [my.telegram.org/apps](https://my.telegram.org/apps) (free application registration, unrelated to the bot token)
 
-Subscription, Payment, PromoCode, ReferralLink — проектируются в Phase 4, не раньше.
-Не создавать таблицы под них заранее ("на будущее") — это прямое нарушение YAGNI.
+For running tests and linters outside Docker: Python 3.13.
+
+### Installation
+
+```bash
+git clone <repository-url>
+cd umd
+
+cp .env.example .env
+# Set BOT_TOKEN. For large-file support also set TELEGRAM_API_ID,
+# TELEGRAM_API_HASH, USE_LOCAL_BOT_API=true and raise
+# MAX_DELIVERABLE_FILE_SIZE_MB (up to 2000).
+
+docker compose up --build
+```
+
+The bot container runs `alembic upgrade head` on startup before launching. The worker container explicitly overrides its entrypoint to skip migrations — two containers racing on `alembic upgrade head` is a real failure mode, not a hypothetical one.
+
+Postgres and Redis are published on non-standard host ports (`5433` and `6380`) to avoid clashing with locally installed instances. Change `HOST_POSTGRES_PORT` / `HOST_REDIS_PORT` if needed.
+
+### Local development
+
+```bash
+python3.13 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+The full stack still needs Docker for Postgres and Redis; the local environment exists for the quality gate below.
 
 ---
 
-## 6. Ключевые архитектурные решения, требующие фиксации до кода
+## Environment Variables
 
-### 6.1 Downloader Interface (Domain)
+| Variable | Required | Default | Description |
+|---|:--:|---|---|
+| `BOT_TOKEN` | Yes | — | Telegram bot token from @BotFather |
+| `ENVIRONMENT` | No | `local` | `local` / `staging` / `production` |
+| `LOG_LEVEL` | No | `INFO` | structlog level |
+| `USE_LOCAL_BOT_API` | No | `false` | Route bot and worker to the self-hosted Bot API server |
+| `TELEGRAM_API_ID` | No | — | Required only when `USE_LOCAL_BOT_API=true` |
+| `TELEGRAM_API_HASH` | No | — | Required only when `USE_LOCAL_BOT_API=true` |
+| `LOCAL_BOT_API_BASE_URL` | No | `http://telegram-bot-api:8081` | Address of the local Bot API server |
+| `MAX_DELIVERABLE_FILE_SIZE_MB` | No | `50` | Upload ceiling; raise to 2000 with the local server |
+| `DEFAULT_LOCALE` | No | `en` | Fallback when the user has no override and no recognizable `language_code` |
+| `ALLOWED_DOMAINS` | No | YouTube, TikTok, Instagram, Twitter/X, VK | JSON list; suffix match per label. Empty list disables the allowlist (development only) |
+| `PREVIEW_CONTEXT_TTL_SECONDS` | No | `600` | How long a preview's confirm button stays actionable |
+| `RATE_LIMIT_DOWNLOADS_PER_HOUR` | No | `10` | Per Telegram user |
+| `RATE_LIMIT_PREVIEWS_PER_MINUTE` | No | `5` | Per Telegram user |
+| `DOWNLOAD_TIMEOUT_SECONDS` | No | `1800` | Hard ceiling per download job; the subprocess is terminated on expiry |
+| `FILE_UPLOAD_TIMEOUT_SECONDS` | No | `1800` | Per-request timeout for the upload leg specifically |
+| `POSTGRES_HOST` / `POSTGRES_PORT` / `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | No | `postgres` / `5432` / `umd` / `umd` / `umd` | In-network database connection |
+| `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` | No | `redis` / `6379` / `0` | In-network Redis connection |
+| `HOST_POSTGRES_PORT` / `HOST_REDIS_PORT` | No | `5433` / `6380` | Host-side published ports (Compose only) |
 
-```python
-class DownloaderPort(Protocol):
-    async def download(
-        self,
-        url: str,
-        options: DownloadOptions,
-        progress_callback: Callable[[DownloadProgress], Awaitable[None]] | None = None,
-    ) -> DownloadResult: ...
-```
+Secrets are read from `.env`, wrapped in `SecretStr`, and never logged. `.env` is git-ignored.
 
-- yt-dlp — блокирующая библиотека. В async-воркере она выполняется через
-  `run_in_executor` (thread pool) либо в отдельном subprocess — для длительных загрузок
-  предпочтителен subprocess, т.к. позволяет убить процесс по таймауту/отмене без риска
-  зависания event loop.
-- Прогресс скачивания передаётся не напрямую в Telegram, а через `progress_callback` →
-  Redis pub/sub → Presentation слушает и обновляет сообщение. Downloader ничего не знает
-  о Telegram.
+---
 
-### 6.2 Хранилище файлов
+## Database
 
-- Telegram Bot API ограничивает размер файла (~50MB через стандартный Bot API,
-  до 2GB через локальный Bot API server). "Large files" как Premium-фича из FEATURES.md
-  требует решения ещё в Phase 2: либо локальный Bot API server, либо S3/MinIO + прямая ссылка.
-- Автоматическая очистка временных файлов — не "когда-нибудь", а конкретный механизм:
-  TTL-задача в arq (cron-подобный периодический job), которая чистит файлы старше N минут,
-  плюс явный cleanup в `finally` после отправки.
+Four Alembic migrations define the current schema:
 
-### 6.3 Аутентификация для мультиклиентности
-
-`User.telegram_id` — один из способов входа, не первичный ключ. Для REST API/SDK — API keys,
-для Web/Mobile — JWT/OAuth, привязанные к тому же `User.id`. Это закладывается в Phase 1,
-даже если сами API keys/JWT появятся только в Phase 5 — иначе миграция потребует переписывать
-модель User и все связанные foreign keys.
-
-### 6.4 Интеграция с yt-dlp (уточнение по итогам разбора README)
-
-**Уточнение решения из §6.1:** предпочтителен нативный Python API (`yt_dlp.YoutubeDL`),
-а не CLI-обёртка с парсингом stdout. Библиотека даёт напрямую:
-
-- `progress_hooks` — callback на каждый апдейт прогресса, без парсинга текста.
-- `match_filter` — фильтрация по длительности/дате/размеру ещё до скачивания (пригодится
-  для ограничений Free-тарифа, см. ниже).
-- `logger` — перехват debug/info/warning/error вместо парсинга stdout/stderr.
-- Кастомные `PostProcessor` — точки расширения для будущих фич (например, добавление
-  водяного знака, upload в S3 сразу после скачивания).
-- `extract_info(url, download=False)` — можно получить метаданные (заголовок, превью,
-  длительность) **без скачивания**, чтобы показать пользователю подтверждение перед
-  реальной загрузкой — важно для UX и для отсечения нежелательных запросов до траты ресурсов.
-
-**Блокирующий вызов остаётся проблемой.** `YoutubeDL.download()` — синхронный блокирующий
-вызов. Правки по сравнению с §6.1:
-
-- Внутри arq worker-процесса вызов оборачивается в `run_in_executor`, НО для гарантированной
-  отмены по таймауту/пользовательской отмене (long-running download) один job лучше выполнять
-  в отдельном OS-процессе (`ProcessPoolExecutor` или explicit `multiprocessing.Process`), а не
-  в потоке — поток нельзя безопасно убить, процесс можно.
-- `progress_hooks` вызываются из чужого потока/процесса. Мост обратно в asyncio — через
-  `asyncio.run_coroutine_threadsafe` (при ThreadPoolExecutor) либо через межпроцессную очередь
-  (при ProcessPoolExecutor) → Redis pub/sub, как и было решено в §6.1.
-
-**DownloaderPort реализация должна использовать следующие ydl_opts как базовые:**
-
-| Опция | Назначение |
+| Revision | Change |
 |---|---|
-| `restrictfilenames: True` | Санитизация имён файлов силами yt-dlp — не изобретать свою (закрывает пункт Security.md "sanitize filenames") |
-| `paths: {'home': ..., 'temp': ...}` | Разделение временной и финальной директории "из коробки" — совпадает с моделью StoragePort (временное хранилище → перенос после успеха) |
-| `match_filter` | Ограничения по тарифу: например, для Free — `duration < 3600`, `filesize < 200MB`; для Premium — без ограничений. Реализуется как параметр DownloadOptions, не хардкод |
-| `max_filesize` / `retries` / `fragment_retries` | Защита от зависших/аномальных закачек, используется вместо самодельных ретраев |
-| `concurrent_fragments` | Регулируемая скорость на основе тарифа (Premium — выше) |
-| `logger` + `progress_hooks` | Обязательны всегда — источник структурированных логов и прогресса |
+| `0001_initial` | `users`, `download_requests` |
+| `0002_user_language` | `users.language` (nullable) |
+| `0003_format_kind` | `download_requests.format_kind`, `NOT NULL`, server default `video` |
+| `0004_quality_kind` | `download_requests.quality_kind`, `NOT NULL`, server default `hd_720` |
 
-**Двухфазный флоу скачивания (уточнение use case):**
-
-```
-1. extract_info(url, download=False) → показать пользователю превью/подтверждение
-2. match_filter проверяет лимиты тарифа ДО скачивания
-3. download() запускается только после подтверждения (или сразу, если UX не требует превью)
+```bash
+docker compose exec bot alembic upgrade head
+docker compose exec bot alembic current
 ```
 
-Это отдельный use case `PreviewDownloadUseCase`, не только `RequestDownloadUseCase` — стоит
-внести в доменную модель Phase 2.
-
-**Cookies / авторизованный контент:** yt-dlp поддерживает `--cookies` и
-`--cookies-from-browser`. Для нашего сервера "cookies-from-browser" неприменимо (нет браузера
-пользователя на сервере). Если в будущем понадобится доступ к приватному/возрастному контенту —
-это отдельное решение уровня Security (хранение credentials/cookies пользователя = чувствительные
-данные, шифрование в БД, отдельный consent-flow). На Phase 1-3 не реализуется, но стоит держать
-в уме как будущий security-риск, а не откладывать до момента, когда фича внезапно понадобится.
+`User.telegram_id` is deliberately **not** the primary key. It is one authentication method among future others (API keys, JWT); making it the key would force a rewrite of the user model and every foreign key the moment a second client appears.
 
 ---
 
-## 7. Coding Style
+## Testing
 
-- Production-ready код всегда, никаких прототипов.
-- DRY, без дублирования логики.
-- Dependency Injection везде, где есть внешняя зависимость (БД, очередь, downloader).
-- Полная типизация (mypy strict в CI).
-- Интерфейсы (Protocol/ABC) создаются до реализации.
-- **Тестирование — без оговорки "whenever practical".** Конкретные пороги:
-  - `domain/` и `application/` — 100% покрытие (чистая логика, дёшево тестировать).
-  - `infrastructure/` — интеграционные тесты через testcontainers (Postgres, Redis).
-  - `presentation/` — smoke/contract-тесты на ключевые сценарии.
-  - CI gate: сборка падает при покрытии `domain/application` ниже 85%.
-- Публичные методы — docstring с описанием, аргументами, исключениями.
+```bash
+pytest                 # 314 tests
+pytest tests/unit      # Domain, application, presentation logic
+pytest tests/integration
+```
 
----
+`pytest-asyncio` runs in `auto` mode, so async tests need no decorator.
 
-## 8. Development Rules
+**Unit tests** cover use cases, the URL allowlist and validator, the `yt-dlp` options builder (per format and per quality branch), the error classifier against a corpus of real `yt-dlp` message strings, the localizer, callback encoding/decoding including byte budget and legacy payloads, the progress throttler, the rate limiter, message formatting under i18n, and the subprocess kill mechanism.
 
-Работа строго по фичам, без забегания вперёд. Каждая фича проходит:
+**Integration tests** exercise the SQLAlchemy repositories against SQLite through `aiosqlite`, including the language and quality round trips.
 
-1. Обсуждение архитектуры (альтернативы, tradeoffs, explicit решение).
-2. Реализация.
-3. Тесты (unit + integration, где применимо).
-4. Документация (docstring + обновление docs/ при изменении публичного контракта).
-5. Ревью и рефакторинг.
+Two testing habits worth calling out, both introduced after real bugs:
 
-Ничего не помечается "готово", пока не пройдены все 5 пунктов.
+- **Argument-capture tests.** Mocking the downloader without asserting on the `DownloadOptions` it received once let a bug ship where the MP3 button silently delivered video: the field was persisted correctly but never threaded into the worker's read path. Tests now capture and assert the actual arguments.
+- **Migrations are verified by running them.** Unit tests do not execute Alembic. A revision id longer than 32 characters passes every test and then fails at runtime on `UPDATE alembic_version` — after the DDL has already run.
 
 ---
 
-## 9. Security
+## Code Quality
 
-- Валидация каждого URL (allowlist поддерживаемых доменов, а не blacklist).
-- Санитизация имён файлов, защита от path traversal.
-- Экранирование аргументов при вызове FFmpeg/yt-dlp как subprocess — **никогда** не строить
-  shell-команду конкатенацией строк, только list-аргументы без `shell=True`.
-- Rate limiting на уровне пользователя (Redis-based, per `user_id`) — конкретный лимит
-  определяется в Phase 2 при реализации handlers.
-- Flood protection на уровне aiogram middleware.
-- Secrets только в `.env`, никогда не в коде/логах.
-- Никогда не доверять пользовательскому вводу — валидация на границе Presentation, до
-  передачи в Application.
+```bash
+ruff check .
+mypy --strict src
+```
+
+CI runs `ruff check src tests`, `mypy src` (strict mode is set in `pyproject.toml`) and `pytest -v` on Python 3.13 for every push and pull request to `main`.
+
+`ruff` is configured with `E`, `F`, `I`, `UP`, `B`, `SIM` rule sets at a 100-character line length.
 
 ---
 
-## 10. Performance & Observability
+## Internationalization
 
-- Множественные параллельные скачивания через пул arq-воркеров (конфигурируемое
-  количество процессов).
-- Telegram handlers никогда не блокируются — вся тяжёлая работа только через очередь.
-- structlog с structured logging (JSON в проде), correlation ID на каждый DownloadRequest
-  для трассировки через все слои.
-- Prometheus метрики: количество активных скачиваний, время скачивания, ошибки по типу
-  источника, размер очереди.
-- Health checks для каждого сервиса в docker-compose (bot, api, worker, postgres, redis).
+All presentation strings live in `locales/ru/messages.ftl` and `locales/en/messages.ftl`. The two files are structurally identical by key; a missing key raises rather than silently rendering the identifier, and a test enforces the invariant.
+
+Locale resolution order: explicit `/language` override stored in Redis → Telegram `language_code` hint → `DEFAULT_LOCALE`.
+
+The domain layer carries no strings. Domain exceptions carry a semantic `error_key`; both the handler path (via `I18nContext`) and the worker path (via `ErrorLocalizerPort` with an explicit locale, since no update context exists there) resolve that key into text at the boundary.
 
 ---
 
-## 11. Roadmap (пересмотренный)
+## Security
 
-**Phase 1 — Foundation**
-Репозиторий, структура по слоям (§4), Docker Compose (postgres, redis), Alembic +
-черновая доменная модель (§5), базовый CI (lint + pytest).
-
-**Phase 2 — Core Download Flow**
-DownloaderPort + yt-dlp adapter (subprocess-based), arq worker, StoragePort (локальное
-хранилище + TTL cleanup), Telegram handlers (тонкие), progress через Redis pub/sub.
-
-**Phase 3 — User Experience**
-История скачиваний, настройки, локализация, rate limiting.
-
-**Phase 4 — Monetization**
-Subscription/Payment/PromoCode entities, Premium-логика, Referral, Admin Panel,
-юридическая политика по источникам (см. §1).
-
-**Phase 5 — Public API**
-FastAPI роутеры, API keys, JWT, документация OpenAPI, SDK.
-
-**Phase 6 — Web**
-Web-клиент поверх REST API (тот же Application-слой, новый Presentation).
-
-**Phase 7 — Scaling & Ops**
-Горизонтальное масштабирование воркеров, CDN для отдачи файлов, продвинутый мониторинг,
-локальный Bot API server при необходимости (см. §6.2).
-
-Ads/Analytics распределяются между Phase 4 (базовая статистика) и Phase 7 (полноценная
-рекламная система) — в исходном ROADMAP они не были размещены вообще.
+- **URL allowlist**, not a blocklist — validated at the presentation boundary before anything reaches the application layer.
+- **Filename sanitization** delegated to `yt-dlp`'s `restrictfilenames`, avoiding a hand-rolled sanitizer.
+- **No shell**. FFmpeg and `yt-dlp` are driven through the Python API and list arguments; no string concatenation into a shell command.
+- **HTML escaping** of every externally sourced string (titles, usernames, URLs) before substitution, since Fluent does not escape.
+- **No diagnostic leakage.** Raw `yt-dlp` output goes to the structured log; the user receives a short localized message.
+- **Rate limiting** per user on both previews and downloads.
+- **Atomic token consumption.** Preview tokens are popped with Redis `GETDEL`, closing the double-tap race on callback buttons.
+- **Secrets** live only in `.env`, typed as `SecretStr`.
 
 ---
 
-## 12. Роль ассистента (для CLAUDE.md)
+## Engineering Decisions
 
-Действовать как Senior Software Architect, Senior Python Engineer, DevOps Engineer,
-Security Engineer, QA Engineer.
+**Process isolation over thread isolation for `yt-dlp`.** A hung download inside a thread cannot be killed; the event loop is hostage to it. Each download therefore runs in its own `multiprocessing.Process`, terminated on timeout. The cost is that the format choice must be pickled across the boundary as a plain string and reconstructed as an enum in the child.
 
-- Никогда не писать прототипный код — только production-ready.
-- Оспаривать плохие архитектурные решения, включая собственные предыдущие, если
-  найдены новые обстоятельства.
-- Не реализовывать крупные фичи без предварительного обсуждения архитектуры.
-- Объяснять tradeoffs явно, а не только финальное решение.
-- При конфликте между документацией проекта и запросом пользователя — уточнять,
-  а не молча выбирать одну из сторон.
-- Отвечать на русском языке.
-- Читать все файлы документации проекта перед ответом; PROJECT_SPEC.md — источник истины.
+**Local Bot API server instead of S3 links or quality downgrading.** Both alternatives change the product — one moves the file out of Telegram, the other silently degrades what the user asked for. A self-hosted `telegram-bot-api` container sharing a Docker volume with the worker keeps delivery inside the chat, at the price of one more service and a `my.telegram.org` registration. The shared volume path must match exactly on both sides: in local mode the server reads the file from disk itself.
+
+**`FormatKind` and `QualityKind` are persisted domain properties; message coordinates are not.** The worker reconstructs the entire request from the database using only its id, so anything describing *what to download* must be persisted. By contrast, the chat and message ids that say *where to draw progress* are transport details and travel in the job payload — putting them in the domain would let Telegram leak across the dependency rule.
+
+**`FormatKind` is a separate value object from `MediaType`.** `MediaType` describes what the source *is*; `FormatKind` describes what the user *asked for*. One video can be requested as MP4 or as MP3 — different intents against the same medium, therefore different concepts.
+
+**Classification by message text, not by exception type.** `yt-dlp` catches its own exception subtypes and re-raises them as a single `DownloadError`, so the subtype is gone by the time it reaches us. The classifier matches stable signatures in the message, ordered by priority, and is tested against a corpus of real strings. A bare `Unsupported URL` is disambiguated by URL shape: a TikTok `/photo/` link is a supported *site* with unsupported *media*, which is a different message to the user.
+
+**Explicit failure on unreadable data.** A `status` value the domain cannot interpret raises `CorruptedRecordError` with an internal error key rather than falling back to a default — a silent fallback would hide database corruption behind normal-looking behaviour.
+
+**No pinned `player_client` for YouTube.** A hardcoded `extractor_args player_client` was itself the cause of a silent quality regression: it went stale, YouTube changed, and downloads degraded to 360p without any error. The fix was to remove the override and pin the `yt-dlp` version instead, letting its default client selection track upstream.
+
+**Final filenames come from `post_hooks`.** Neither `prepare_filename()` nor `requested_downloads` survives an FFmpeg merge or an MP3 transcode — the extension changes underneath them. `post_hooks` is the only hook that reports the path that actually exists on disk.
+
+---
+
+## Known Limitations
+
+- **Telegram's blue command menu ignores `/language`.** It is rendered by the client from the app's own locale, not from our override. Everything else — messages, buttons, previews, errors — follows the switch. Cosmetic and not fixable from the server side.
+- **Photos and carousels are rejected, not downloaded.** `yt-dlp` cannot extract Instagram carousel photos on this stack (photo slides return "No video formats found"; TikTok `/photo/` returns "Unsupported URL"). Such posts are detected and declined with an honest message rather than failing obscurely. Supporting them requires a second `DownloaderPort` implementation over a different library.
+- **Error signatures are calibrated mainly on YouTube and TikTok.** Instagram, X/Twitter and VK failure strings have not yet been collected from live runs, so those may fall through to the generic category.
+- **No metrics or dashboards yet.** structlog gives structured logs; Prometheus and Grafana are planned, not implemented.
+- **No coverage gate in CI.** The specification calls for one on the domain and application layers; CI currently runs lint, type check and tests only.
+- **Integration tests use SQLite, not Postgres.** Repository behaviour is verified through `aiosqlite`; dialect-specific behaviour is therefore not covered by the suite and is checked by running migrations in Docker.
+- **Download history is stored but not exposed.** `download_requests` accumulates every request including format and quality, but no history command exists yet.
+
+---
+
+## Roadmap
+
+Ordered by the project's phase plan; only items with a defined design are listed.
+
+- Live error corpus for Instagram, X/Twitter and VK; extend classifier signatures
+- Usage policy and rights-holder complaint process — a prerequisite for any monetization
+- Prometheus metrics and Grafana dashboards; health checks for every service
+- Photo and carousel support behind a second `DownloaderPort` implementation
+- Download history surfaced to the user
+- Premium tier: subscriptions, per-tier limits via `match_filter`, priority queueing
+- Public REST API (FastAPI) with API keys and JWT, sharing the existing application layer
+- Web client on top of that API
+
+Deliberately not built yet, per YAGNI: REST/Web/Mobile clients, payments, referrals, admin panel. The architecture leaves room for them; the code does not anticipate them.
+
+---
+
+## License
+
+No license file is currently present in this repository. All rights reserved by default until one is added.
