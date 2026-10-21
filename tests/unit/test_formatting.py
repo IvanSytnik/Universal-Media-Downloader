@@ -37,10 +37,12 @@ async def core():
 
 def _settings() -> Settings:
     return Settings(
+        bot_token="test-token",  # type: ignore[arg-type]
         allowed_domains=["youtube.com", "tiktok.com"],
         rate_limit_downloads_per_hour=10,
         rate_limit_previews_per_minute=5,
         max_deliverable_file_size_mb=50,
+        _env_file=None,  # type: ignore[call-arg]  # don't read a real .env in tests
     )
 
 
