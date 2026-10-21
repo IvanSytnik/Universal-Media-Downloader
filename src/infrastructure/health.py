@@ -1,32 +1,17 @@
 """Raw connectivity health checks for external dependencies.
 
-Day 1 note: this talks to Postgres/Redis directly (asyncpg / redis-py),
-without going through SQLAlchemy or the repository layer, because neither
-exists yet. From Day 2, once SQLAlchemy + repositories land, this module
-will be reduced to a thin wrapper that goes through the same connection
-pools as the rest of the app — no separate driver.
+Talks to Postgres/Redis directly (asyncpg / redis-py) rather than through
+the repository layer: the point is to probe the dependency itself, with a
+short timeout, independent of the application's connection pools.
 """
 
 from __future__ import annotations
-
-from dataclasses import dataclass
 
 import asyncpg
 import redis.asyncio as redis
 
 from src.config.settings import Settings
-
-
-@dataclass(frozen=True, slots=True)
-class HealthStatus:
-    postgres_ok: bool
-    redis_ok: bool
-    postgres_error: str | None = None
-    redis_error: str | None = None
-
-    @property
-    def all_ok(self) -> bool:
-        return self.postgres_ok and self.redis_ok
+from src.domain.value_objects.health_report import HealthReport
 
 
 async def check_postgres(settings: Settings) -> tuple[bool, str | None]:
@@ -56,12 +41,18 @@ async def check_redis(settings: Settings) -> tuple[bool, str | None]:
             await client.aclose()
 
 
-async def run_health_check(settings: Settings) -> HealthStatus:
-    postgres_ok, postgres_error = await check_postgres(settings)
-    redis_ok, redis_error = await check_redis(settings)
-    return HealthStatus(
-        postgres_ok=postgres_ok,
-        redis_ok=redis_ok,
-        postgres_error=postgres_error,
-        redis_error=redis_error,
-    )
+class ConnectivityHealthCheck:
+    """``HealthCheckPort`` implementation over the raw probes above."""
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
+    async def check(self) -> HealthReport:
+        database_ok, database_error = await check_postgres(self._settings)
+        cache_ok, cache_error = await check_redis(self._settings)
+        return HealthReport(
+            database_ok=database_ok,
+            cache_ok=cache_ok,
+            database_error=database_error,
+            cache_error=cache_error,
+        )

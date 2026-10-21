@@ -1,4 +1,8 @@
-"""Bot and Dispatcher factories. Day 9: i18n wiring.
+"""Dispatcher factory. Day 9: i18n wiring.
+
+The ``Bot`` itself is built by the composition root (``src/main.py``)
+from ``src.infrastructure.telegram.bot_factory`` — constructing it needs
+the infrastructure-level session/timeout configuration.
 
 The dispatcher now installs the I18nMiddleware (so every handler gets an
 ``i18n`` context) and stashes the precomputed button-translation sets in
@@ -10,12 +14,10 @@ polling.
 
 from __future__ import annotations
 
-from aiogram import Bot, Dispatcher
+from aiogram import Dispatcher
 from aiogram.fsm.storage.base import BaseStorage
 from aiogram_i18n import I18nMiddleware
 
-from src.config.settings import Settings
-from src.infrastructure.telegram.bot_factory import create_telegram_bot
 from src.presentation.telegram.handlers.basic import router as basic_router
 from src.presentation.telegram.handlers.download import router as download_router
 from src.presentation.telegram.handlers.download_flow import router as download_flow_router
@@ -23,10 +25,6 @@ from src.presentation.telegram.handlers.language import router as language_route
 from src.presentation.telegram.handlers.preview import router as preview_router
 from src.presentation.telegram.handlers.worker import router as worker_router
 from src.presentation.telegram.i18n import collect_button_translations
-
-
-def create_bot(settings: Settings) -> Bot:
-    return create_telegram_bot(settings)
 
 
 def create_dispatcher(
@@ -46,7 +44,7 @@ def create_dispatcher(
     """
     dp = Dispatcher(storage=storage)
     # Injected into every handler/filter by name (workflow data), exactly
-    # like settings/session_factory are in main.py.
+    # like settings/use_cases are in main.py.
     dp["button_translations"] = button_translations
 
     i18n_middleware.setup(dispatcher=dp)
@@ -61,4 +59,4 @@ def create_dispatcher(
 
 
 # Re-exported for main.py so it doesn't need to import from i18n directly.
-__all__ = ["create_bot", "create_dispatcher", "collect_button_translations"]
+__all__ = ["create_dispatcher", "collect_button_translations"]

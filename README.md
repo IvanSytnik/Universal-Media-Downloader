@@ -28,7 +28,7 @@ The interesting part of this project is not the download itself. It is everythin
 
 **Audience.** Telegram users who want video or MP3 from a link, with a two-step confirmation flow and localized interface (ru/en).
 
-**Status.** Working end to end: preview → format choice → quality choice → download → delivery, with real-time progress and categorized, localized error messages. 314 tests with 99% coverage of the domain and application layers (CI gate: 90%), `ruff` and `mypy --strict` clean.
+**Status.** Working end to end: preview → format choice → quality choice → download → delivery, with real-time progress and categorized, localized error messages. 326 tests with 99% coverage of the domain and application layers (CI gate: 90%), `ruff` and `mypy --strict` clean.
 
 ---
 
@@ -62,7 +62,7 @@ The interesting part of this project is not the download itself. It is everythin
 | i18n | aiogram-i18n + fluent.runtime | FTL locale files, missing key = hard error |
 | Config | pydantic-settings | Single source of truth, `SecretStr` for credentials |
 | Logging | structlog | Structured logs over the stdlib logger factory |
-| Testing | pytest, pytest-asyncio, pytest-cov, aiosqlite | 314 tests; repositories tested against SQLite; coverage gate on core layers |
+| Testing | pytest, pytest-asyncio, pytest-cov, aiosqlite | 326 tests; repositories tested against SQLite; coverage gate on core layers |
 | Quality | ruff, mypy (strict) | Enforced in CI |
 | Infrastructure | Docker, Docker Compose | Multi-stage, non-root image; five services |
 | CI | GitHub Actions | Lint → type check → test + coverage gate → image build on every push and PR to `main` |
@@ -71,7 +71,11 @@ The interesting part of this project is not the download itself. It is everythin
 
 ## Architecture
 
-Clean Architecture with a strict dependency rule at the core. The domain layer imports nothing from the outside — no aiogram, SQLAlchemy, Redis or yt-dlp; the application layer depends only on domain ports; infrastructure implements those ports. The presentation layer calls application use cases and also acts as the composition root for now: handlers construct the concrete adapters they pass in (see [Known Limitations](#known-limitations)).
+Clean Architecture with an enforced dependency rule. The domain layer imports nothing from the outside — no aiogram, SQLAlchemy, Redis or yt-dlp; the application layer depends only on domain ports; infrastructure implements those ports; presentation calls application use cases and never touches infrastructure directly.
+
+The rule is checked by tests, not by convention: `tests/unit/test_architecture.py` parses every module under `src/` with `ast` and fails the build on any import that crosses a layer boundary the wrong way, including imports hidden under `if TYPE_CHECKING:`.
+
+**Composition root.** All wiring happens in one place. `src/main.py` builds the long-lived resources (engine, Redis, arq pool), and `src/composition.py` turns concrete adapters into use cases behind a `UseCaseProvider` protocol that the presentation layer declares (`src/presentation/telegram/dependencies.py`). The dispatcher injects the provider and the domain ports into handlers through aiogram workflow data. A handler asks for `use_cases.request_download()` and receives a ready use case scoped to one database transaction; it never sees a session, a repository class or Redis.
 
 ```
 Presentation  →  Application  →  Domain  ←  Infrastructure
@@ -141,7 +145,7 @@ sequenceDiagram
 
 ### Ports defined by the domain
 
-`DownloaderPort`, `StoragePort`, `NotifierPort`, `TaskQueuePort`, `UserRepositoryPort`, `DownloadRequestRepositoryPort`, `RateLimiterPort`, `PreviewContextStorePort`, `ErrorLocalizerPort`, `ProgressPublisherPort`.
+`DownloaderPort`, `StoragePort`, `NotifierPort`, `TaskQueuePort`, `UserRepositoryPort`, `DownloadRequestRepositoryPort`, `RateLimiterPort`, `PreviewContextStorePort`, `ErrorLocalizerPort`, `ProgressPublisherPort`, `HealthCheckPort`, `PingResultReader`.
 
 Every one of these has exactly one infrastructure implementation today and could gain a second (S3 storage, a REST notifier, a gallery-dl downloader) without touching the domain or application layers.
 
@@ -169,8 +173,9 @@ umd/
 │   │   │                        #   MediaPreview, url_validation
 │   │   ├── interfaces/          # All ports
 │   │   └── exceptions.py        # Domain errors, each carrying an error_key
-│   ├── application/use_cases/   # RegisterUser, PreviewDownload,
-│   │                            #   RequestDownload, ProcessDownload
+│   ├── application/use_cases/   # RegisterUser, SetUserLanguage,
+│   │                            #   PreviewDownload, RequestDownload,
+│   │                            #   ProcessDownload
 │   ├── infrastructure/
 │   │   ├── downloader/          # yt-dlp adapter + error classifier
 │   │   ├── database/            # SQLAlchemy models, async repositories
@@ -182,17 +187,20 @@ umd/
 │   │   ├── preview_context/     # Token → URL, Redis, atomic GETDEL
 │   │   └── localization/        # Fluent localizer for the worker path
 │   ├── presentation/telegram/   # Thin handlers, keyboards, formatting,
-│   │                            #   i18n middleware, progress listener
+│   │                            #   i18n middleware, progress listener,
+│   │                            #   dependencies.py (UseCaseProvider contract)
 │   ├── config/settings.py       # pydantic-settings, single source of truth
 │   ├── shared/logging.py        # structlog configuration
-│   └── main.py                  # Bot entrypoint
+│   ├── composition.py           # Composition root: adapters → use cases
+│   └── main.py                  # Bot entrypoint, builds and injects resources
 ├── locales/{ru,en}/messages.ftl # Every user-facing string
 ├── infra/
 │   ├── alembic/versions/        # 0001_initial … 0004_quality_kind
 │   └── docker/                  # bot.Dockerfile, entrypoint.sh
 ├── tests/
-│   ├── unit/                    # Domain, application, presentation logic
-│   └── integration/             # Repositories against SQLite
+│   ├── unit/                    # Domain, application, presentation logic,
+│   │                            #   architecture (layer boundary) tests
+│   └── integration/             # Repositories and composition root against SQLite
 ├── .github/workflows/ci.yml     # Lint, type check, tests + coverage gate, image build
 ├── docker-compose.yml
 ├── Makefile                     # Developer shortcuts (`make help`)
@@ -304,7 +312,7 @@ docker compose exec bot alembic current
 ## Testing
 
 ```bash
-pytest                 # 314 tests
+pytest                 # 326 tests
 pytest tests/unit      # Domain, application, presentation logic
 pytest tests/integration
 
@@ -317,7 +325,9 @@ make test-cov          # with the coverage gate, as CI runs it
 
 **Unit tests** cover use cases, the URL allowlist and validator, the `yt-dlp` options builder (per format and per quality branch), the error classifier against a corpus of real `yt-dlp` message strings, the localizer, callback encoding/decoding including byte budget and legacy payloads, the progress throttler, the rate limiter, message formatting under i18n, and the subprocess kill mechanism.
 
-**Integration tests** exercise the SQLAlchemy repositories against SQLite through `aiosqlite`, including the language and quality round trips.
+**Integration tests** exercise the SQLAlchemy repositories against SQLite through `aiosqlite`, including the language and quality round trips, and the composition root's transaction boundary (commit on success, rollback on exception).
+
+**Architecture tests** enforce the dependency rule on every run: domain imports only the standard library, application only domain, and presentation never imports infrastructure. A self-test proves the scanner catches every import form, so the check cannot pass vacuously.
 
 Two testing habits worth calling out, both introduced after real bugs:
 
@@ -394,7 +404,6 @@ The domain layer carries no strings. Domain exceptions carry a semantic `error_k
 - **Photos and carousels are rejected, not downloaded.** `yt-dlp` cannot extract Instagram carousel photos on this stack (photo slides return "No video formats found"; TikTok `/photo/` returns "Unsupported URL"). Such posts are detected and declined with an honest message rather than failing obscurely. Supporting them requires a second `DownloaderPort` implementation over a different library.
 - **Error signatures are calibrated mainly on YouTube and TikTok.** Instagram, X/Twitter and VK failure strings have not yet been collected from live runs, so those may fall through to the generic category.
 - **No metrics or dashboards yet.** structlog gives structured logs; Prometheus and Grafana are planned, not implemented.
-- **Handlers are the composition root.** Telegram handlers construct concrete adapters (SQLAlchemy repositories, `YtDlpDownloader`, `ArqTaskQueue`) inline before calling a use case. The use cases themselves stay infrastructure-free, but moving the wiring into a dedicated container or middleware would make presentation depend on application only.
 - **Diagnostic commands are not access-controlled.** `/health`, `/worker_ping` and `/worker_status` respond to any user; `/health` includes raw connection error text when a dependency is down. They should be gated behind an admin allowlist before a public launch.
 - **Integration tests use SQLite, not Postgres.** Repository behaviour is verified through `aiosqlite`; dialect-specific behaviour is therefore not covered by the suite and is checked by running migrations in Docker.
 - **Download history is stored but not exposed.** `download_requests` accumulates every request including format and quality, but no history command exists yet.

@@ -11,7 +11,7 @@ Persistence is two-tier, matching the manager's read path (see i18n.py):
 - Redis (via ``manager.set_locale``) — the hot-path cache the locale
   manager reads on every update, so the switch takes effect on the NEXT
   update immediately.
-- Postgres (via ``UserRepository.set_language``) — durable source of
+- Postgres (via ``SetUserLanguageUseCase`` → ``UserRepository.set_language``) — durable source of
   truth, survives a Redis eviction; a future cache-miss path can re-warm
   Redis from it.
 
@@ -27,10 +27,8 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 from aiogram_i18n import I18nContext
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from src.infrastructure.database.engine import session_scope
-from src.infrastructure.database.repositories.user_repository import SqlAlchemyUserRepository
+from src.presentation.telegram.dependencies import UseCaseProvider
 from src.presentation.telegram.i18n import SUPPORTED_LOCALES
 from src.presentation.telegram.keyboards import (
     CB_LANG_PREFIX,
@@ -57,7 +55,7 @@ async def handle_language_command(message: Message, i18n: I18nContext) -> None:
 async def handle_language_choice(
     callback: CallbackQuery,
     i18n: I18nContext,
-    session_factory: async_sessionmaker[AsyncSession],
+    use_cases: UseCaseProvider,
 ) -> None:
     chosen = (callback.data or "")[len(CB_LANG_PREFIX):]
     if chosen not in SUPPORTED_LOCALES:
@@ -74,9 +72,8 @@ async def handle_language_choice(
     await i18n.set_locale(chosen)
 
     # 2. Durable store (Postgres).
-    async with session_scope(session_factory) as session:
-        repo = SqlAlchemyUserRepository(session)
-        await repo.set_language(telegram_id, chosen)
+    async with use_cases.set_user_language() as use_case:
+        await use_case.execute(telegram_id, chosen)
 
     logger.info("language_changed", telegram_id=telegram_id, locale=chosen)
 

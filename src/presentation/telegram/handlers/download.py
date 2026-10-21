@@ -17,19 +17,11 @@ from html import escape as html_escape
 from aiogram import Router
 from aiogram.types import Message
 from aiogram_i18n import I18nContext
-from arq import ArqRedis
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from src.application.use_cases.request_download import RequestDownloadUseCase
 from src.config.settings import Settings
 from src.domain.exceptions import UnsupportedURLError
 from src.domain.interfaces.rate_limiter import RateLimiterPort
-from src.infrastructure.database.engine import session_scope
-from src.infrastructure.database.repositories.download_request_repository import (
-    SqlAlchemyDownloadRequestRepository,
-)
-from src.infrastructure.database.repositories.user_repository import SqlAlchemyUserRepository
-from src.infrastructure.queue.arq_task_queue import ArqTaskQueue
+from src.presentation.telegram.dependencies import UseCaseProvider
 from src.presentation.telegram.formatting import format_retry_after
 from src.shared.logging import get_logger
 
@@ -41,8 +33,7 @@ logger = get_logger(__name__)
 async def handle_download(
     message: Message,
     i18n: I18nContext,
-    session_factory: async_sessionmaker[AsyncSession],
-    arq_pool: ArqRedis,
+    use_cases: UseCaseProvider,
     settings: Settings,
     rate_limiter: RateLimiterPort,
 ) -> None:
@@ -70,12 +61,7 @@ async def handle_download(
 
     status_message = await message.answer(i18n.get("download-started"))
 
-    async with session_scope(session_factory) as session:
-        use_case = RequestDownloadUseCase(
-            user_repository=SqlAlchemyUserRepository(session),
-            download_request_repository=SqlAlchemyDownloadRequestRepository(session),
-            task_queue=ArqTaskQueue(arq_pool),
-        )
+    async with use_cases.request_download() as use_case:
         try:
             request = await use_case.execute(
                 telegram_id,

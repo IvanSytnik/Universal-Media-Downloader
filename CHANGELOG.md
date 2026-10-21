@@ -7,9 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.0] - 2026-10-21
 
-Production-hardening and repository polish. No user-facing behaviour changes.
+Production hardening, enforced layer boundaries and repository polish.
 
 ### Added
+
+- Architecture tests (`tests/unit/test_architecture.py`): every module under `src/` is parsed with `ast`, and the build fails if domain imports anything beyond the standard library, application imports anything beyond domain, or presentation imports infrastructure.
+- Composition root (`src/composition.py`): `SqlAlchemyUseCaseProvider` implements the presentation-declared `UseCaseProvider` protocol. Session-scoped use cases are handed out as async context managers, one per unit of work.
+- `SetUserLanguageUseCase`, `HealthCheckPort` / `HealthReport` and `PingResultReader` / `PingResult`, so `/language`, `/health` and `/worker_status` go through the application and domain layers.
 
 - MIT `LICENSE`.
 - `Makefile` with `help`, `install`, `lint`, `format`, `test`, `test-cov`, `up`, `down`, `logs`, `migrate` targets.
@@ -21,6 +25,7 @@ Production-hardening and repository polish. No user-facing behaviour changes.
 
 ### Changed
 
+- Telegram handlers no longer import infrastructure. They receive `use_cases`, `health_check` and `ping_result_reader` through aiogram workflow data, wired once in `src/main.py`. The `Bot` is built by the composition root instead of the presentation layer.
 - Docker image is now multi-stage: dependencies are resolved into a venv in a builder stage, and the runtime image no longer ships `uv`, `curl` or `unzip`.
 - Containers run as an unprivileged `app` user (uid 10001) instead of root.
 - Deno is copied from the official `denoland/deno` image at a pinned version, replacing `curl … | sh`.

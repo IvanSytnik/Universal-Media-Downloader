@@ -16,13 +16,10 @@ from aiogram import Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
 from aiogram_i18n import I18nContext
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from src.application.use_cases.register_user import RegisterUserUseCase
 from src.config.settings import Settings
-from src.infrastructure.database.engine import session_scope
-from src.infrastructure.database.repositories.user_repository import SqlAlchemyUserRepository
-from src.infrastructure.health import run_health_check
+from src.domain.interfaces.health_check import HealthCheckPort
+from src.presentation.telegram.dependencies import UseCaseProvider
 from src.presentation.telegram.formatting import format_help
 from src.presentation.telegram.keyboards import main_menu_keyboard
 from src.shared.logging import get_logger
@@ -35,7 +32,7 @@ logger = get_logger(__name__)
 async def handle_start(
     message: Message,
     i18n: I18nContext,
-    session_factory: async_sessionmaker[AsyncSession],
+    use_cases: UseCaseProvider,
 ) -> None:
     if message.from_user is None:
         return
@@ -48,8 +45,7 @@ async def handle_start(
     # clients too (Web/API have no language_code to fall back on).
     language = i18n.locale
 
-    async with session_scope(session_factory) as session:
-        use_case = RegisterUserUseCase(SqlAlchemyUserRepository(session))
+    async with use_cases.register_user() as use_case:
         user = await use_case.execute(telegram_id, language=language)
 
     logger.info(
@@ -83,17 +79,17 @@ async def handle_ping(message: Message) -> None:
 
 
 @router.message(lambda m: m.text == "/health")
-async def handle_health(message: Message, i18n: I18nContext, settings: Settings) -> None:
-    status = await run_health_check(settings)
+async def handle_health(message: Message, i18n: I18nContext, health_check: HealthCheckPort) -> None:
+    report = await health_check.check()
 
-    postgres_error = html_escape(status.postgres_error) if status.postgres_error else None
-    redis_error = html_escape(status.redis_error) if status.redis_error else None
+    database_error = html_escape(report.database_error) if report.database_error else None
+    cache_error = html_escape(report.cache_error) if report.cache_error else None
     ok = i18n.get("health-ok")
 
     lines = [
-        i18n.get("health-postgres", status=ok if status.postgres_ok else f"❌ {postgres_error}"),
-        i18n.get("health-redis", status=ok if status.redis_ok else f"❌ {redis_error}"),
+        i18n.get("health-postgres", status=ok if report.database_ok else f"❌ {database_error}"),
+        i18n.get("health-redis", status=ok if report.cache_ok else f"❌ {cache_error}"),
     ]
     await message.answer("\n".join(lines))
 
-    logger.info("health_check", postgres_ok=status.postgres_ok, redis_ok=status.redis_ok)
+    logger.info("health_check", postgres_ok=report.database_ok, redis_ok=report.cache_ok)

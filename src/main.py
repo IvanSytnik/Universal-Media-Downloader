@@ -1,4 +1,12 @@
-"""Application entrypoint — bot + DB + task queue + i18n (Day 9)."""
+"""Bot process entrypoint and composition root.
+
+Builds every long-lived resource (engine, Redis, arq pool, i18n core),
+wires concrete infrastructure adapters behind domain ports and the
+``UseCaseProvider`` (see ``src/composition.py``), and injects them into
+the dispatcher as workflow data. This module and ``src/composition.py``
+are the only places in the bot process allowed to import infrastructure;
+``tests/unit/test_architecture.py`` enforces that for ``src/presentation``.
+"""
 
 from __future__ import annotations
 
@@ -10,15 +18,20 @@ from aiogram.types import BotCommand
 from arq.connections import RedisSettings, create_pool
 from redis.asyncio import Redis
 
+from src.composition import SqlAlchemyUseCaseProvider
 from src.config.settings import Settings, get_settings
 from src.infrastructure.database.engine import create_engine, create_session_factory
+from src.infrastructure.downloader.ytdlp_downloader import YtDlpDownloader
+from src.infrastructure.health import ConnectivityHealthCheck
 from src.infrastructure.preview_context.redis_preview_context_store import (
     RedisPreviewContextStore,
 )
+from src.infrastructure.queue.arq_task_queue import ArqTaskQueue
+from src.infrastructure.queue.ping_result_reader import RedisPingResultReader
 from src.infrastructure.rate_limit.redis_rate_limiter import RedisRateLimiter
+from src.infrastructure.telegram.bot_factory import create_telegram_bot
 from src.presentation.telegram.bot import (
     collect_button_translations,
-    create_bot,
     create_dispatcher,
 )
 from src.presentation.telegram.i18n import (
@@ -64,6 +77,13 @@ async def main() -> None:
         ttl_seconds=settings.preview_context_ttl_seconds,
     )
     rate_limiter = RedisRateLimiter(redis=redis_client)
+    health_check = ConnectivityHealthCheck(settings)
+    ping_result_reader = RedisPingResultReader(redis=redis_client)
+    use_cases = SqlAlchemyUseCaseProvider(
+        session_factory=session_factory,
+        task_queue=ArqTaskQueue(arq_pool),
+        downloader=YtDlpDownloader(),
+    )
 
     # i18n: build the core, start it (loads FTL for every locale), then
     # derive the button-translation sets from the SAME started core so
@@ -73,7 +93,7 @@ async def main() -> None:
     i18n_middleware = create_i18n_middleware(i18n_core, redis=redis_client)
     button_translations = collect_button_translations(i18n_core)
 
-    bot = create_bot(settings)
+    bot = create_telegram_bot(settings)
     dp = create_dispatcher(
         i18n_middleware=i18n_middleware,
         button_translations=button_translations,
@@ -116,10 +136,11 @@ async def main() -> None:
         await dp.start_polling(
             bot,
             settings=settings,
-            session_factory=session_factory,
-            arq_pool=arq_pool,
+            use_cases=use_cases,
             preview_store=preview_store,
             rate_limiter=rate_limiter,
+            health_check=health_check,
+            ping_result_reader=ping_result_reader,
         )
     finally:
         listener_task.cancel()
