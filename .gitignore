@@ -24,3 +24,10 @@ AUDIT_REPORT.md
 CLAUDE_CODE_KICKOFF.md
 TASK_*.md
 STRUCTURE.md
+CHANGES_*.md
+NEW_CHAT_KICKOFF*.md
+STRUCTURE_delta*.md
+
+# coverage
+.coverage.*
+coverage.xml

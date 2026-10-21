@@ -1,0 +1,45 @@
+# Keep the build context small and free of secrets. The Dockerfile copies
+# only pyproject.toml, alembic.ini, infra/alembic, locales, src and the
+# entrypoint; everything else is excluded here.
+
+# VCS and CI
+.git
+.github
+.gitignore
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+
+# Python tooling and caches
+.venv
+venv
+__pycache__
+*.py[cod]
+*.egg-info
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.coverage
+.coverage.*
+coverage.xml
+htmlcov
+dist
+build
+
+# Tests and docs are not part of the runtime image
+tests
+*.md
+LICENSE
+Makefile
+
+# Editor / OS / assistant artifacts
+.idea
+.vscode
+.DS_Store
+.claude
+
+# Local data
+postgres_data
+docker-compose*.yml

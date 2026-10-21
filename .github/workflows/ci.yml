@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
@@ -25,8 +32,23 @@ jobs:
       - name: Lint (ruff)
         run: ruff check src tests
 
-      - name: Type check (mypy)
-        run: mypy src
+      - name: Type check (mypy --strict)
+        run: mypy --strict src
 
-      - name: Run tests
-        run: pytest -v
+      # Coverage gate on the core layers; thresholds live in pyproject.toml
+      # ([tool.coverage.report]) and the Makefile's `test-cov` target.
+      - name: Test with coverage gate (domain + application ≥ 90%)
+        run: >
+          pytest -v
+          --cov=src/domain
+          --cov=src/application
+          --cov-report=term-missing
+          --cov-fail-under=90
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -f infra/docker/bot.Dockerfile -t umd:ci .

@@ -1,5 +1,12 @@
 # Universal Media Downloader
 
+[![CI](https://github.com/IvanSytnik/Universal-Media-Downloader/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/IvanSytnik/Universal-Media-Downloader/actions/workflows/ci.yml)
+[![Python 3.13](https://img.shields.io/badge/python-3.13-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3130/)
+[![Code style: ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Type checked: mypy --strict](https://img.shields.io/badge/mypy-strict-2A6DB2.svg)](https://mypy.readthedocs.io/en/stable/command_line.html#cmdoption-mypy-strict)
+[![Coverage gate: 90%](https://img.shields.io/badge/core%20coverage-%E2%89%A590%25-brightgreen.svg)](#testing)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+
 A production-grade Telegram bot that downloads media from YouTube, TikTok, Instagram, X/Twitter and VK via `yt-dlp` — built as the core of a future SaaS platform rather than as a single-file script.
 
 The interesting part of this project is not the download itself. It is everything around it: keeping a blocking, crash-prone third-party library isolated from an asyncio event loop, delivering files larger than Telegram's 50 MB limit, streaming real-time progress across process boundaries, and keeping the domain layer free of any knowledge that Telegram exists.
@@ -21,7 +28,7 @@ The interesting part of this project is not the download itself. It is everythin
 
 **Audience.** Telegram users who want video or MP3 from a link, with a two-step confirmation flow and localized interface (ru/en).
 
-**Status.** Working end to end: preview → format choice → quality choice → download → delivery, with real-time progress and categorized, localized error messages. 314 tests, `ruff` and `mypy --strict` clean.
+**Status.** Working end to end: preview → format choice → quality choice → download → delivery, with real-time progress and categorized, localized error messages. 314 tests with 99% coverage of the domain and application layers (CI gate: 90%), `ruff` and `mypy --strict` clean.
 
 ---
 
@@ -55,16 +62,16 @@ The interesting part of this project is not the download itself. It is everythin
 | i18n | aiogram-i18n + fluent.runtime | FTL locale files, missing key = hard error |
 | Config | pydantic-settings | Single source of truth, `SecretStr` for credentials |
 | Logging | structlog | Structured logs over the stdlib logger factory |
-| Testing | pytest, pytest-asyncio, aiosqlite | 314 tests; repositories tested against SQLite |
+| Testing | pytest, pytest-asyncio, pytest-cov, aiosqlite | 314 tests; repositories tested against SQLite; coverage gate on core layers |
 | Quality | ruff, mypy (strict) | Enforced in CI |
-| Infrastructure | Docker, Docker Compose | Five services, health-checked |
-| CI | GitHub Actions | Lint → type check → test on every push and PR to `main` |
+| Infrastructure | Docker, Docker Compose | Multi-stage, non-root image; five services |
+| CI | GitHub Actions | Lint → type check → test + coverage gate → image build on every push and PR to `main` |
 
 ---
 
 ## Architecture
 
-Clean Architecture with an enforced dependency rule. The domain layer imports nothing from the outside; infrastructure implements domain-declared ports; presentation calls application use cases and never touches infrastructure directly.
+Clean Architecture with a strict dependency rule at the core. The domain layer imports nothing from the outside — no aiogram, SQLAlchemy, Redis or yt-dlp; the application layer depends only on domain ports; infrastructure implements those ports. The presentation layer calls application use cases and also acts as the composition root for now: handlers construct the concrete adapters they pass in (see [Known Limitations](#known-limitations)).
 
 ```
 Presentation  →  Application  →  Domain  ←  Infrastructure
@@ -95,6 +102,41 @@ flowchart TB
     PD --> N[TelegramNotifier]
     N --> BA[telegram-bot-api<br/>local server]
     BA --> U
+```
+
+### Lifecycle of one download
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant Bot as Bot process<br/>(aiogram)
+    participant Redis
+    participant DB as PostgreSQL
+    participant Worker as arq worker
+    participant Child as Child process<br/>(yt-dlp + FFmpeg)
+
+    User->>Bot: URL
+    Bot->>Bot: allowlist + rate limit
+    Bot->>Bot: extract_info(download=False)<br/>in a thread executor
+    Bot->>Redis: SET token → URL (TTL)
+    Bot-->>User: preview card + [Video] [MP3]
+    User->>Bot: tap Video → 1080p
+    Bot->>Redis: GETDEL token (first tap wins)
+    Bot->>DB: INSERT DownloadRequest(format, quality)
+    Bot->>Redis: enqueue job(request_id)
+    Redis->>Worker: job
+    Worker->>DB: load DownloadRequest by id
+    Worker->>Child: spawn, download
+    loop progress_hooks
+        Child-->>Worker: DownloadProgress (IPC queue)
+        Worker-->>Redis: PUBLISH progress
+        Redis-->>Bot: progress event
+        Bot-->>User: edit message (throttled)
+    end
+    Child-->>Worker: final path (post_hooks)
+    Worker-->>User: send file via local Bot API
+    Worker->>DB: mark done
 ```
 
 ### Ports defined by the domain
@@ -151,7 +193,11 @@ umd/
 ├── tests/
 │   ├── unit/                    # Domain, application, presentation logic
 │   └── integration/             # Repositories against SQLite
+├── .github/workflows/ci.yml     # Lint, type check, tests + coverage gate, image build
 ├── docker-compose.yml
+├── Makefile                     # Developer shortcuts (`make help`)
+├── CHANGELOG.md
+├── LICENSE
 └── pyproject.toml
 ```
 
@@ -180,7 +226,7 @@ cp .env.example .env
 # TELEGRAM_API_HASH, USE_LOCAL_BOT_API=true and raise
 # MAX_DELIVERABLE_FILE_SIZE_MB (up to 2000).
 
-docker compose up --build
+docker compose up --build      # or: make up
 ```
 
 The bot container runs `alembic upgrade head` on startup before launching. The worker container explicitly overrides its entrypoint to skip migrations — two containers racing on `alembic upgrade head` is a real failure mode, not a hypothetical one.
@@ -191,8 +237,18 @@ Postgres and Redis are published on non-standard host ports (`5433` and `6380`) 
 
 ```bash
 python3.13 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev]"      # or: make install
 ```
+
+Common tasks are wrapped in the `Makefile`:
+
+| Command | What it does |
+|---|---|
+| `make lint` | `ruff check` + `mypy --strict` |
+| `make format` | `ruff format` + `ruff check --fix` |
+| `make test` / `make test-cov` | Test suite / with the coverage gate |
+| `make up` / `make down` / `make logs` | Compose stack lifecycle and bot + worker logs |
+| `make migrate` | `alembic upgrade head` inside the bot container |
 
 The full stack still needs Docker for Postgres and Redis; the local environment exists for the quality gate below.
 
@@ -251,7 +307,11 @@ docker compose exec bot alembic current
 pytest                 # 314 tests
 pytest tests/unit      # Domain, application, presentation logic
 pytest tests/integration
+
+make test-cov          # with the coverage gate, as CI runs it
 ```
+
+**Coverage gate.** CI runs the suite with `--cov=src/domain --cov=src/application --cov-fail-under=90` (branch coverage on) and fails the build below the threshold. Current coverage of those layers is 99%. The gate deliberately targets the core: that is where the business rules live, and the adapters around it are exercised by unit tests against fakes and by live runs in Docker.
 
 `pytest-asyncio` runs in `auto` mode, so async tests need no decorator.
 
@@ -269,11 +329,15 @@ Two testing habits worth calling out, both introduced after real bugs:
 ## Code Quality
 
 ```bash
-ruff check .
-mypy --strict src
+make lint      # ruff check src tests && mypy --strict src
 ```
 
-CI runs `ruff check src tests`, `mypy src` (strict mode is set in `pyproject.toml`) and `pytest -v` on Python 3.13 for every push and pull request to `main`.
+CI runs on Python 3.13 for every push and pull request to `main`:
+
+1. `ruff check src tests`
+2. `mypy --strict src`
+3. `pytest` with the domain + application coverage gate (≥ 90%)
+4. `docker build` of the production image
 
 `ruff` is configured with `E`, `F`, `I`, `UP`, `B`, `SIM` rule sets at a 100-character line length.
 
@@ -298,7 +362,9 @@ The domain layer carries no strings. Domain exceptions carry a semantic `error_k
 - **No diagnostic leakage.** Raw `yt-dlp` output goes to the structured log; the user receives a short localized message.
 - **Rate limiting** per user on both previews and downloads.
 - **Atomic token consumption.** Preview tokens are popped with Redis `GETDEL`, closing the double-tap race on callback buttons.
-- **Secrets** live only in `.env`, typed as `SecretStr`.
+- **Secrets** live only in `.env`, typed as `SecretStr`, and are excluded from the Docker build context by `.dockerignore`.
+- **Unprivileged containers.** The image runs as a dedicated non-root user; build tooling (`uv`, `curl`) stays in the builder stage and never ships.
+- **Local-only data ports.** Postgres and Redis are published on `127.0.0.1` only.
 
 ---
 
@@ -328,7 +394,8 @@ The domain layer carries no strings. Domain exceptions carry a semantic `error_k
 - **Photos and carousels are rejected, not downloaded.** `yt-dlp` cannot extract Instagram carousel photos on this stack (photo slides return "No video formats found"; TikTok `/photo/` returns "Unsupported URL"). Such posts are detected and declined with an honest message rather than failing obscurely. Supporting them requires a second `DownloaderPort` implementation over a different library.
 - **Error signatures are calibrated mainly on YouTube and TikTok.** Instagram, X/Twitter and VK failure strings have not yet been collected from live runs, so those may fall through to the generic category.
 - **No metrics or dashboards yet.** structlog gives structured logs; Prometheus and Grafana are planned, not implemented.
-- **No coverage gate in CI.** The specification calls for one on the domain and application layers; CI currently runs lint, type check and tests only.
+- **Handlers are the composition root.** Telegram handlers construct concrete adapters (SQLAlchemy repositories, `YtDlpDownloader`, `ArqTaskQueue`) inline before calling a use case. The use cases themselves stay infrastructure-free, but moving the wiring into a dedicated container or middleware would make presentation depend on application only.
+- **Diagnostic commands are not access-controlled.** `/health`, `/worker_ping` and `/worker_status` respond to any user; `/health` includes raw connection error text when a dependency is down. They should be gated behind an admin allowlist before a public launch.
 - **Integration tests use SQLite, not Postgres.** Repository behaviour is verified through `aiosqlite`; dialect-specific behaviour is therefore not covered by the suite and is checked by running migrations in Docker.
 - **Download history is stored but not exposed.** `download_requests` accumulates every request including format and quality, but no history command exists yet.
 
@@ -353,4 +420,4 @@ Deliberately not built yet, per YAGNI: REST/Web/Mobile clients, payments, referr
 
 ## License
 
-No license file is currently present in this repository. All rights reserved by default until one is added.
+Released under the [MIT License](LICENSE). Copyright (c) 2026 Ivan Sytnik.

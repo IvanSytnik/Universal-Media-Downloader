@@ -1,31 +1,73 @@
-# Day 4: добавлены ffmpeg и deno (JS-рантайм) — оба нужны yt-dlp даже
-# для одного только extract_info (превью), не только для скачивания:
-# YouTube требует расшифровку через JS-рантайм (yt-dlp-ejs) уже на этапе
-# получения метаданных. См. PROJECT_SPEC §6.4.
-FROM python:3.13-slim
+# syntax=docker/dockerfile:1
+#
+# One image for both the bot and the worker (same code, different command).
+#
+# Two stages: the builder resolves Python dependencies into an isolated
+# virtualenv; the runtime stage copies only that venv plus the system
+# binaries yt-dlp needs, so build tooling (uv, compilers, curl) never
+# ships in the final image.
+
+# ---------------------------------------------------------------------------
+# Builder
+# ---------------------------------------------------------------------------
+FROM python:3.13-slim AS builder
+
+COPY --from=ghcr.io/astral-sh/uv:0.8.22 /uv /usr/local/bin/uv
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+
 WORKDIR /app
-# ffmpeg — системный бинарник (НЕ pip-пакет с тем же именем — частая
-# ошибка, которая молча ничего не скачивает). deno — JS-рантайм для
-# yt-dlp-ejs, устанавливается официальным скриптом (в apt его нет).
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    curl \
-    unzip \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL https://deno.land/install.sh | sh \
-    && mv /root/.deno/bin/deno /usr/local/bin/deno \
-    && rm -rf /root/.deno
-RUN pip install --no-cache-dir uv
-COPY pyproject.toml alembic.ini ./
-COPY src ./src
+COPY pyproject.toml ./
+
+# Dependencies only, not the project itself: the code runs from /app/src
+# via PYTHONPATH, so path-relative lookups (locales_dir() resolves
+# parents[3] of src/presentation/telegram/i18n.py) land inside /app.
+RUN uv venv /opt/venv \
+    && uv pip install --python /opt/venv/bin/python --no-cache -r pyproject.toml
+
+# ---------------------------------------------------------------------------
+# Runtime
+# ---------------------------------------------------------------------------
+FROM python:3.13-slim AS runtime
+
+# ffmpeg is the system binary (NOT the pip package of the same name — a
+# common mistake that silently downloads nothing); yt-dlp uses it for the
+# MP4 merge and MP3 extraction.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Deno is the JS runtime yt-dlp-ejs needs to decipher YouTube metadata,
+# even for extract_info(download=False). Copied from the official image at
+# a pinned version instead of piping an install script into sh.
+COPY --from=denoland/deno:bin-2.5.6 /deno /usr/local/bin/deno
+
+# Unprivileged runtime user. /tmp/umd-downloads is the worker's download
+# directory (DOWNLOAD_STORAGE_DIR) and the mount point of the shared
+# download_storage volume; creating it here owned by `app` means a fresh
+# named volume inherits that ownership.
+RUN groupadd --system --gid 10001 app \
+    && useradd --system --uid 10001 --gid app --create-home --home-dir /home/app app \
+    && mkdir -p /tmp/umd-downloads \
+    && chown app:app /tmp/umd-downloads
+
+ENV PATH="/opt/venv/bin:${PATH}" \
+    PYTHONPATH=/app \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY --from=builder /opt/venv /opt/venv
+COPY alembic.ini ./
 COPY infra/alembic ./infra/alembic
-# Day 9: FTL-локали. Нужны и боту (рендерит строки), и воркеру — образ
-# общий; воркер строки не рендерит, но COPY дешёвый и держит образы
-# идентичными. Путь /app/locales совпадает с locales_dir() (parents[3]
-# от src/presentation/telegram/i18n.py → /app).
+# FTL locales: the bot renders them, the worker localizes error messages.
 COPY locales ./locales
-RUN uv pip install --system --no-cache -e .
-COPY infra/docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY src ./src
+COPY --chmod=755 infra/docker/entrypoint.sh /entrypoint.sh
+
+USER app
+
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python", "-m", "src.main"]

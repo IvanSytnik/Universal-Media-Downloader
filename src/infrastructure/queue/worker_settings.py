@@ -119,3 +119,6 @@ class WorkerSettings:
     # the coroutine mid-flight with no clean message. +300s margin
     # covers the final upload to Telegram after the download finishes.
     job_timeout = 2100
+    # Heartbeat for the Compose healthcheck (`arq --check`). arq's default
+    # of 3600s would let a dead worker look healthy for up to an hour.
+    health_check_interval = 60

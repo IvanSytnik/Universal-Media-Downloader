@@ -1,7 +1,10 @@
 [project]
 name = "universal-media-downloader"
-version = "0.1.0"
+version = "1.0.0"
 description = "Production-ready Telegram media downloader — SaaS-oriented architecture"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Ivan Sytnik" }]
 requires-python = ">=3.13"
 dependencies = [
     "aiogram>=3.7,<4.0",
@@ -22,6 +25,7 @@ dependencies = [
 dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
     "ruff>=0.5",
     "mypy>=1.10",
     "aiosqlite>=0.20",
@@ -30,6 +34,22 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+# Coverage gate applies to the core layers (domain + application). The
+# --cov targets are passed on the command line (CI, `make test-cov`) so a
+# plain `pytest` stays fast and does not require pytest-cov.
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_empty = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "^\\s*\\.\\.\\.$",
+]
 
 [tool.ruff]
 line-length = 100
