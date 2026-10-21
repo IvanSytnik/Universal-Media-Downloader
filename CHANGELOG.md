@@ -32,6 +32,11 @@ Production hardening, enforced layer boundaries and repository polish.
 - Postgres and Redis host ports are bound to `127.0.0.1` only, so the default credentials are not reachable from the network.
 - CI runs `mypy --strict` explicitly and uses least-privilege `contents: read` permissions with concurrency cancellation.
 
+### Security
+
+- `/health`, `/worker_ping` and `/worker_status` are restricted to Telegram ids listed in the new `ADMIN_TELEGRAM_IDS` setting. The allowlist fails closed (an empty list denies everyone). Non-admin attempts are consumed silently and logged as `admin_command_denied`.
+- `/health` no longer echoes raw connection errors (driver messages, hostnames) into the chat. It replies with ✅ / ❌ per component, and diagnostics are logged as `health_check_failed`.
+
 ### Removed
 
 - Per-patch working notes `CHANGES.md` and `CHANGES_TESTFIX.md`, superseded by this changelog.

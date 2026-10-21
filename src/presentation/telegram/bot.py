@@ -18,12 +18,12 @@ from aiogram import Dispatcher
 from aiogram.fsm.storage.base import BaseStorage
 from aiogram_i18n import I18nMiddleware
 
+from src.presentation.telegram.handlers.admin import router as admin_router
 from src.presentation.telegram.handlers.basic import router as basic_router
 from src.presentation.telegram.handlers.download import router as download_router
 from src.presentation.telegram.handlers.download_flow import router as download_flow_router
 from src.presentation.telegram.handlers.language import router as language_router
 from src.presentation.telegram.handlers.preview import router as preview_router
-from src.presentation.telegram.handlers.worker import router as worker_router
 from src.presentation.telegram.i18n import collect_button_translations
 
 
@@ -49,9 +49,11 @@ def create_dispatcher(
 
     i18n_middleware.setup(dispatcher=dp)
 
+    # admin_router goes FIRST: its denial handler must consume /health and
+    # friends from non-admins before any other router could react to them.
+    dp.include_router(admin_router)
     dp.include_router(basic_router)
     dp.include_router(language_router)
-    dp.include_router(worker_router)
     dp.include_router(preview_router)
     dp.include_router(download_router)
     dp.include_router(download_flow_router)

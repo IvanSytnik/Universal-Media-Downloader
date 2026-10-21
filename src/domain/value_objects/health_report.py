@@ -1,4 +1,9 @@
-"""HealthReport — connectivity status of the external dependencies."""
+"""HealthReport — connectivity status of the external dependencies.
+
+Deliberately booleans only: the raw failure reason (driver exception
+text, hostnames, DSNs) belongs in the structured log, never in a reply
+to a chat. Carrying it here would invite exactly that leak.
+"""
 
 from __future__ import annotations
 
@@ -9,8 +14,6 @@ from dataclasses import dataclass
 class HealthReport:
     database_ok: bool
     cache_ok: bool
-    database_error: str | None = None
-    cache_error: str | None = None
 
     @property
     def all_ok(self) -> bool:

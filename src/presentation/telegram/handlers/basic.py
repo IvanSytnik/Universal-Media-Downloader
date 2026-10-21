@@ -1,4 +1,6 @@
-"""Basic handlers: /start, /help, /ping, /health.
+"""Basic handlers: /start, /help, /ping.
+
+Operational commands (/health, /worker_*) live in ``admin.py``.
 
 Day 9: all replies are localized via the injected ``i18n`` context (the
 I18nMiddleware puts it in workflow data under the key ``i18n``, so it's
@@ -10,15 +12,12 @@ even before any explicit ``/language`` choice exists.
 
 from __future__ import annotations
 
-from html import escape as html_escape
-
 from aiogram import Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
 from aiogram_i18n import I18nContext
 
 from src.config.settings import Settings
-from src.domain.interfaces.health_check import HealthCheckPort
 from src.presentation.telegram.dependencies import UseCaseProvider
 from src.presentation.telegram.formatting import format_help
 from src.presentation.telegram.keyboards import main_menu_keyboard
@@ -77,19 +76,3 @@ async def handle_help(message: Message, i18n: I18nContext, settings: Settings) -
 async def handle_ping(message: Message) -> None:
     await message.answer("pong")
 
-
-@router.message(lambda m: m.text == "/health")
-async def handle_health(message: Message, i18n: I18nContext, health_check: HealthCheckPort) -> None:
-    report = await health_check.check()
-
-    database_error = html_escape(report.database_error) if report.database_error else None
-    cache_error = html_escape(report.cache_error) if report.cache_error else None
-    ok = i18n.get("health-ok")
-
-    lines = [
-        i18n.get("health-postgres", status=ok if report.database_ok else f"❌ {database_error}"),
-        i18n.get("health-redis", status=ok if report.cache_ok else f"❌ {cache_error}"),
-    ]
-    await message.answer("\n".join(lines))
-
-    logger.info("health_check", postgres_ok=report.database_ok, redis_ok=report.cache_ok)

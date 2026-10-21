@@ -144,6 +144,7 @@ rate-limit-minutes = Limit reached. Try again in { $minutes } { $minutes ->
 health-postgres = Postgres: { $status }
 health-redis = Redis: { $status }
 health-ok = ✅ OK
+health-fail = ❌ Unavailable
 worker-ping-enqueued =
     Task enqueued.
     Job ID: { $jobid }

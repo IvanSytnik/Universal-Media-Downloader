@@ -28,7 +28,7 @@ The interesting part of this project is not the download itself. It is everythin
 
 **Audience.** Telegram users who want video or MP3 from a link, with a two-step confirmation flow and localized interface (ru/en).
 
-**Status.** Working end to end: preview → format choice → quality choice → download → delivery, with real-time progress and categorized, localized error messages. 326 tests with 99% coverage of the domain and application layers (CI gate: 90%), `ruff` and `mypy --strict` clean.
+**Status.** Working end to end: preview → format choice → quality choice → download → delivery, with real-time progress and categorized, localized error messages. 343 tests with 99% coverage of the domain and application layers (CI gate: 90%), `ruff` and `mypy --strict` clean.
 
 ---
 
@@ -62,7 +62,7 @@ The interesting part of this project is not the download itself. It is everythin
 | i18n | aiogram-i18n + fluent.runtime | FTL locale files, missing key = hard error |
 | Config | pydantic-settings | Single source of truth, `SecretStr` for credentials |
 | Logging | structlog | Structured logs over the stdlib logger factory |
-| Testing | pytest, pytest-asyncio, pytest-cov, aiosqlite | 326 tests; repositories tested against SQLite; coverage gate on core layers |
+| Testing | pytest, pytest-asyncio, pytest-cov, aiosqlite | 343 tests; repositories tested against SQLite; coverage gate on core layers |
 | Quality | ruff, mypy (strict) | Enforced in CI |
 | Infrastructure | Docker, Docker Compose | Multi-stage, non-root image; five services |
 | CI | GitHub Actions | Lint → type check → test + coverage gate → image build on every push and PR to `main` |
@@ -275,6 +275,7 @@ The full stack still needs Docker for Postgres and Redis; the local environment 
 | `LOCAL_BOT_API_BASE_URL` | No | `http://telegram-bot-api:8081` | Address of the local Bot API server |
 | `MAX_DELIVERABLE_FILE_SIZE_MB` | No | `50` | Upload ceiling; raise to 2000 with the local server |
 | `DEFAULT_LOCALE` | No | `en` | Fallback when the user has no override and no recognizable `language_code` |
+| `ADMIN_TELEGRAM_IDS` | No | `[]` | JSON list of Telegram user ids allowed to run `/health`, `/worker_ping`, `/worker_status`. Empty list denies everyone |
 | `ALLOWED_DOMAINS` | No | YouTube, TikTok, Instagram, Twitter/X, VK | JSON list; suffix match per label. Empty list disables the allowlist (development only) |
 | `PREVIEW_CONTEXT_TTL_SECONDS` | No | `600` | How long a preview's confirm button stays actionable |
 | `RATE_LIMIT_DOWNLOADS_PER_HOUR` | No | `10` | Per Telegram user |
@@ -312,7 +313,7 @@ docker compose exec bot alembic current
 ## Testing
 
 ```bash
-pytest                 # 326 tests
+pytest                 # 343 tests
 pytest tests/unit      # Domain, application, presentation logic
 pytest tests/integration
 
@@ -370,6 +371,8 @@ The domain layer carries no strings. Domain exceptions carry a semantic `error_k
 - **No shell**. FFmpeg and `yt-dlp` are driven through the Python API and list arguments; no string concatenation into a shell command.
 - **HTML escaping** of every externally sourced string (titles, usernames, URLs) before substitution, since Fluent does not escape.
 - **No diagnostic leakage.** Raw `yt-dlp` output goes to the structured log; the user receives a short localized message.
+- **Admin-only operational commands.** `/health`, `/worker_ping` and `/worker_status` require the sender to be in `ADMIN_TELEGRAM_IDS`. The allowlist fails closed (empty means nobody), and for everyone else the commands behave as if they did not exist: the update is consumed silently and the attempt is logged.
+- **Sanitized health output.** `/health` replies with per-component ✅ / ❌ indicators only. Raw probe errors (driver messages, hostnames, DSNs) go to the structured log and never into a chat, not even an admin's. The domain `HealthReport` has no field that could carry them.
 - **Rate limiting** per user on both previews and downloads.
 - **Atomic token consumption.** Preview tokens are popped with Redis `GETDEL`, closing the double-tap race on callback buttons.
 - **Secrets** live only in `.env`, typed as `SecretStr`, and are excluded from the Docker build context by `.dockerignore`.
@@ -404,7 +407,6 @@ The domain layer carries no strings. Domain exceptions carry a semantic `error_k
 - **Photos and carousels are rejected, not downloaded.** `yt-dlp` cannot extract Instagram carousel photos on this stack (photo slides return "No video formats found"; TikTok `/photo/` returns "Unsupported URL"). Such posts are detected and declined with an honest message rather than failing obscurely. Supporting them requires a second `DownloaderPort` implementation over a different library.
 - **Error signatures are calibrated mainly on YouTube and TikTok.** Instagram, X/Twitter and VK failure strings have not yet been collected from live runs, so those may fall through to the generic category.
 - **No metrics or dashboards yet.** structlog gives structured logs; Prometheus and Grafana are planned, not implemented.
-- **Diagnostic commands are not access-controlled.** `/health`, `/worker_ping` and `/worker_status` respond to any user; `/health` includes raw connection error text when a dependency is down. They should be gated behind an admin allowlist before a public launch.
 - **Integration tests use SQLite, not Postgres.** Repository behaviour is verified through `aiosqlite`; dialect-specific behaviour is therefore not covered by the suite and is checked by running migrations in Docker.
 - **Download history is stored but not exposed.** `download_requests` accumulates every request including format and quality, but no history command exists yet.
 

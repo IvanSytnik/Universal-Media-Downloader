@@ -12,6 +12,9 @@ import redis.asyncio as redis
 
 from src.config.settings import Settings
 from src.domain.value_objects.health_report import HealthReport
+from src.shared.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 async def check_postgres(settings: Settings) -> tuple[bool, str | None]:
@@ -42,7 +45,10 @@ async def check_redis(settings: Settings) -> tuple[bool, str | None]:
 
 
 class ConnectivityHealthCheck:
-    """``HealthCheckPort`` implementation over the raw probes above."""
+    """``HealthCheckPort`` implementation over the raw probes above.
+
+    Failure diagnostics go to the structured log only; the returned report
+    carries booleans, so nothing raw can reach a chat."""
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -50,9 +56,8 @@ class ConnectivityHealthCheck:
     async def check(self) -> HealthReport:
         database_ok, database_error = await check_postgres(self._settings)
         cache_ok, cache_error = await check_redis(self._settings)
-        return HealthReport(
-            database_ok=database_ok,
-            cache_ok=cache_ok,
-            database_error=database_error,
-            cache_error=cache_error,
-        )
+        if database_error is not None:
+            logger.warning("health_check_failed", component="postgres", error=database_error)
+        if cache_error is not None:
+            logger.warning("health_check_failed", component="redis", error=cache_error)
+        return HealthReport(database_ok=database_ok, cache_ok=cache_ok)

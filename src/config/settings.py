@@ -76,6 +76,13 @@ class Settings(BaseSettings):
     # politely reports that the preview is stale.
     preview_context_ttl_seconds: int = Field(default=600)
 
+    # --- Access control ---
+    # Telegram user ids allowed to run operational commands (/health,
+    # /worker_ping, /worker_status). Empty = nobody: fail closed, so a
+    # fresh deployment never exposes diagnostics to the public.
+    # Override via env: ADMIN_TELEGRAM_IDS='[123456789]'
+    admin_telegram_ids: list[int] = Field(default_factory=list)
+
     # --- Rate limiting (Day 8) ---
     # Downloads are the expensive action (worker CPU, bandwidth, disk),
     # previews are cheaper but still hit yt-dlp extraction — both are
@@ -148,6 +155,10 @@ class Settings(BaseSettings):
     @property
     def allowed_domains_set(self) -> frozenset[str]:
         return frozenset(self.allowed_domains)
+
+    @property
+    def admin_telegram_ids_set(self) -> frozenset[int]:
+        return frozenset(self.admin_telegram_ids)
 
     @property
     def max_deliverable_file_size_bytes(self) -> int:

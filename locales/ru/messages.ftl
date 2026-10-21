@@ -148,6 +148,7 @@ rate-limit-minutes = Лимит исчерпан. Попробуй через { 
 health-postgres = Postgres: { $status }
 health-redis = Redis: { $status }
 health-ok = ✅ OK
+health-fail = ❌ Недоступен
 worker-ping-enqueued =
     Задача поставлена в очередь.
     Job ID: { $jobid }
