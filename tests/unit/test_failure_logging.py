@@ -159,9 +159,9 @@ async def test_diagnostics_go_to_the_log_and_not_to_the_user() -> None:
     notifier = _Notifier()
 
     with structlog.testing.capture_logs() as logs:
-        await _use_case(
-            repo, notifier, _FailingDownloader(PrivateContentError(_SECRET))
-        ).execute(request.id, chat_id=1, message_id=2)
+        await _use_case(repo, notifier, _FailingDownloader(PrivateContentError(_SECRET))).execute(
+            request.id, chat_id=1, message_id=2
+        )
 
     logged = [entry for entry in logs if entry["event"] == "process_download_failed"][0]
     assert _SECRET in logged["error"]
@@ -284,9 +284,7 @@ async def test_success_is_logged_with_the_resulting_path(
     # The one happy-path line worth pinning: it's what tells you WHICH
     # file a delivery failure was about.
     produced = str(tmp_path / "v.mp4")
-    monkeypatch.setattr(
-        ytdlp_downloader, "_run_download_in_process", lambda *a, **kw: produced
-    )
+    monkeypatch.setattr(ytdlp_downloader, "_run_download_in_process", lambda *a, **kw: produced)
 
     with structlog.testing.capture_logs() as logs:
         await YtDlpDownloader().download(

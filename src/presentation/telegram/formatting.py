@@ -65,9 +65,7 @@ def format_preview(i18n: I18nContext, preview: MediaPreview) -> str:
     # no HTML escaping). Same reasoning as before Day 9.
     title = html_escape(preview.title)
     uploader = (
-        html_escape(preview.uploader)
-        if preview.uploader
-        else i18n.get("preview-uploader-unknown")
+        html_escape(preview.uploader) if preview.uploader else i18n.get("preview-uploader-unknown")
     )
     return i18n.get(
         "preview-card",

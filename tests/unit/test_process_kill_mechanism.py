@@ -46,9 +46,7 @@ def _run_with_timeout(sleep_seconds: int, timeout_seconds: int) -> tuple[bool, f
     start = time.monotonic()
     process.start()
     try:
-        ytdlp_downloader._wait_and_drain_progress(
-            process, progress_queue, None, timeout_seconds
-        )
+        ytdlp_downloader._wait_and_drain_progress(process, progress_queue, None, timeout_seconds)
         was_killed = False
     except ytdlp_downloader._DownloadTimeoutError:
         was_killed = True

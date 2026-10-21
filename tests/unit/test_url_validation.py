@@ -9,7 +9,9 @@ from src.domain.value_objects.url_validation import validate_url
 
 
 def test_accepts_valid_https_url() -> None:
-    assert validate_url("https://youtube.com/watch?v=abc123") == "https://youtube.com/watch?v=abc123"
+    assert (
+        validate_url("https://youtube.com/watch?v=abc123") == "https://youtube.com/watch?v=abc123"
+    )
 
 
 def test_accepts_valid_http_url() -> None:

@@ -21,8 +21,9 @@ help: ## Show this help
 install: ## Install the project with dev dependencies (editable)
 	$(PYTHON) -m pip install -e ".[dev]"
 
-lint: ## Run ruff and mypy --strict
+lint: ## Run ruff (lint + format check) and mypy --strict
 	$(PYTHON) -m ruff check src tests
+	$(PYTHON) -m ruff format --check src tests
 	$(PYTHON) -m mypy --strict src
 
 format: ## Auto-format and apply safe lint fixes

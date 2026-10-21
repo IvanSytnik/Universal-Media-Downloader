@@ -68,9 +68,7 @@ def _entity(**kwargs: str) -> Any:
 
 
 def test_clean_row_maps_straight_through() -> None:
-    entity = _entity(
-        media_type="audio", status="done", format_kind="audio", quality_kind="hd_1080"
-    )
+    entity = _entity(media_type="audio", status="done", format_kind="audio", quality_kind="hd_1080")
     assert entity.media_type is MediaType.AUDIO
     assert entity.status is DownloadStatus.DONE
     assert entity.format_kind is FormatKind.AUDIO

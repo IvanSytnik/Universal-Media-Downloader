@@ -293,18 +293,14 @@ def test_build_download_progress_converting_marker_maps_to_converting_phase() ->
 
 
 def test_translate_progress_status_finished_audio_emits_converting_marker() -> None:
-    raw = ytdlp_downloader._translate_progress_status(
-        {"status": "finished"}, FormatKind.AUDIO
-    )
+    raw = ytdlp_downloader._translate_progress_status({"status": "finished"}, FormatKind.AUDIO)
     assert raw == {"phase": ProgressPhase.CONVERTING}
 
 
 def test_translate_progress_status_finished_video_emits_nothing() -> None:
     # No ffmpeg transcode step on the video path — nothing worth
     # announcing at this boundary.
-    raw = ytdlp_downloader._translate_progress_status(
-        {"status": "finished"}, FormatKind.VIDEO
-    )
+    raw = ytdlp_downloader._translate_progress_status({"status": "finished"}, FormatKind.VIDEO)
     assert raw is None
 
 
@@ -312,18 +308,22 @@ def test_translate_progress_status_downloading_unchanged_by_format_kind() -> Non
     status = {"status": "downloading", "downloaded_bytes": 10, "total_bytes": 100}
     audio_raw = ytdlp_downloader._translate_progress_status(status, FormatKind.AUDIO)
     video_raw = ytdlp_downloader._translate_progress_status(status, FormatKind.VIDEO)
-    assert audio_raw == video_raw == {
-        "downloaded_bytes": 10,
-        "total_bytes": 100,
-        "speed": None,
-        "eta": None,
-    }
+    assert (
+        audio_raw
+        == video_raw
+        == {
+            "downloaded_bytes": 10,
+            "total_bytes": 100,
+            "speed": None,
+            "eta": None,
+        }
+    )
 
 
 def test_translate_progress_status_other_statuses_emit_nothing() -> None:
-    assert ytdlp_downloader._translate_progress_status(
-        {"status": "error"}, FormatKind.AUDIO
-    ) is None
+    assert (
+        ytdlp_downloader._translate_progress_status({"status": "error"}, FormatKind.AUDIO) is None
+    )
 
 
 @pytest.mark.asyncio
@@ -362,9 +362,7 @@ async def test_download_wires_progress_callback_through_to_domain(
         progress_sink(None)
         return expected_path
 
-    monkeypatch.setattr(
-        ytdlp_downloader, "_run_download_in_process", _fake_run_download_in_process
-    )
+    monkeypatch.setattr(ytdlp_downloader, "_run_download_in_process", _fake_run_download_in_process)
 
     downloader = YtDlpDownloader()
     options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60)
@@ -403,9 +401,7 @@ async def test_download_without_progress_callback_passes_none_sink(
         captured["progress_sink"] = progress_sink
         return expected_path
 
-    monkeypatch.setattr(
-        ytdlp_downloader, "_run_download_in_process", _fake_run_download_in_process
-    )
+    monkeypatch.setattr(ytdlp_downloader, "_run_download_in_process", _fake_run_download_in_process)
 
     downloader = YtDlpDownloader()
     options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60)
@@ -444,9 +440,7 @@ async def test_download_forwards_default_max_height_to_child_runner(
         captured["max_height"] = max_height
         return expected_path
 
-    monkeypatch.setattr(
-        ytdlp_downloader, "_run_download_in_process", _fake_run_download_in_process
-    )
+    monkeypatch.setattr(ytdlp_downloader, "_run_download_in_process", _fake_run_download_in_process)
 
     downloader = YtDlpDownloader()
     options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60)
@@ -487,9 +481,7 @@ async def test_download_forwards_chosen_quality_height_to_child_runner(
         captured["max_height"] = max_height
         return expected_path
 
-    monkeypatch.setattr(
-        ytdlp_downloader, "_run_download_in_process", _fake_run_download_in_process
-    )
+    monkeypatch.setattr(ytdlp_downloader, "_run_download_in_process", _fake_run_download_in_process)
 
     downloader = YtDlpDownloader()
     options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60, quality_kind=quality)
@@ -527,9 +519,7 @@ async def test_audio_download_still_forwards_a_height_but_ignores_it(
         captured["max_height"] = max_height
         return expected_path
 
-    monkeypatch.setattr(
-        ytdlp_downloader, "_run_download_in_process", _fake_run_download_in_process
-    )
+    monkeypatch.setattr(ytdlp_downloader, "_run_download_in_process", _fake_run_download_in_process)
 
     downloader = YtDlpDownloader()
     options = DownloadOptions(

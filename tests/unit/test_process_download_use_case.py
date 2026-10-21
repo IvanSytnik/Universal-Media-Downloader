@@ -82,9 +82,7 @@ class FakeDownloader:
     async def get_preview(self, url: str):  # noqa: ANN201 — not exercised in these tests
         raise NotImplementedError
 
-    async def download(
-        self, url: str, options: DownloadOptions, progress_callback=None
-    ) -> Path:
+    async def download(self, url: str, options: DownloadOptions, progress_callback=None) -> Path:
         if self._error is not None:
             raise self._error
         assert self._result_path is not None

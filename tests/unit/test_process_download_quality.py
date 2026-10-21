@@ -91,9 +91,7 @@ class _NoopPublisher:
         return None
 
 
-async def _capture(
-    quality: QualityKind, fmt: FormatKind = FormatKind.VIDEO
-) -> DownloadOptions:
+async def _capture(quality: QualityKind, fmt: FormatKind = FormatKind.VIDEO) -> DownloadOptions:
     user = User(id=uuid4(), telegram_id=42)
     request = DownloadRequest.create(
         user_id=user.id,

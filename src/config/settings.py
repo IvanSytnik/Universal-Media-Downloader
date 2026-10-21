@@ -173,4 +173,3 @@ def get_settings() -> Settings:
     without relying on environment variables being set at import time.
     """
     return Settings()  # type: ignore[call-arg]  # fields are populated from env, not call args
- 

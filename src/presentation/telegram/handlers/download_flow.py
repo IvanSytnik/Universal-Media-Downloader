@@ -173,9 +173,7 @@ async def handle_download_reply_button(
 
 
 @router.message(_button_matcher(BTN_KEY_HELP))
-async def handle_help_reply_button(
-    message: Message, i18n: I18nContext, settings: Settings
-) -> None:
+async def handle_help_reply_button(message: Message, i18n: I18nContext, settings: Settings) -> None:
     await message.answer(format_help(i18n, settings))
 
 
@@ -260,7 +258,7 @@ async def handle_open_quality_picker(
     preview would just move the failure one tap later, after the user
     has made a choice, which is a worse place to learn about it.
     """
-    token = (callback.data or "")[len(CB_QUALITY_PREFIX):]
+    token = (callback.data or "")[len(CB_QUALITY_PREFIX) :]
     if await preview_store.get(token) is None:
         await callback.answer(i18n.get("flow-preview-stale"), show_alert=True)
         return
@@ -268,9 +266,7 @@ async def handle_open_quality_picker(
     if isinstance(callback.message, Message):
         # Only the markup changes — the preview text stays put, so the
         # card doesn't flicker and nothing needs re-escaping.
-        await callback.message.edit_reply_markup(
-            reply_markup=quality_picker_keyboard(i18n, token)
-        )
+        await callback.message.edit_reply_markup(reply_markup=quality_picker_keyboard(i18n, token))
     await callback.answer()
 
 
@@ -282,15 +278,13 @@ async def handle_back_to_format(
 ) -> None:
     """Step 2 -> 1. Same token, nothing consumed on either leg, so the
     user can bounce between the two steps until the TTL runs out."""
-    token = (callback.data or "")[len(CB_BACK_PREFIX):]
+    token = (callback.data or "")[len(CB_BACK_PREFIX) :]
     if await preview_store.get(token) is None:
         await callback.answer(i18n.get("flow-preview-stale"), show_alert=True)
         return
 
     if isinstance(callback.message, Message):
-        await callback.message.edit_reply_markup(
-            reply_markup=preview_confirm_keyboard(i18n, token)
-        )
+        await callback.message.edit_reply_markup(reply_markup=preview_confirm_keyboard(i18n, token))
     await callback.answer()
 
 
@@ -358,9 +352,7 @@ async def handle_confirm_download(
             )
         except UnsupportedURLError as exc:
             # Our validator again (RequestDownloadUseCase re-validates).
-            await callback.answer(
-                i18n.get("error-bad-url", reason=str(exc)[:150]), show_alert=True
-            )
+            await callback.answer(i18n.get("error-bad-url", reason=str(exc)[:150]), show_alert=True)
             return
 
     logger.info(
@@ -385,7 +377,7 @@ async def handle_cancel_download(
     i18n: I18nContext,
     preview_store: PreviewContextStorePort,
 ) -> None:
-    token = (callback.data or "")[len(CB_CANCEL_PREFIX):]
+    token = (callback.data or "")[len(CB_CANCEL_PREFIX) :]
     await preview_store.delete(token)
 
     if isinstance(callback.message, Message):

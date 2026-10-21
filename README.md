@@ -252,7 +252,7 @@ Common tasks are wrapped in the `Makefile`:
 
 | Command | What it does |
 |---|---|
-| `make lint` | `ruff check` + `mypy --strict` |
+| `make lint` | `ruff check` + `ruff format --check` + `mypy --strict` |
 | `make format` | `ruff format` + `ruff check --fix` |
 | `make test` / `make test-cov` | Test suite / with the coverage gate |
 | `make up` / `make down` / `make logs` | Compose stack lifecycle and bot + worker logs |
@@ -340,15 +340,16 @@ Two testing habits worth calling out, both introduced after real bugs:
 ## Code Quality
 
 ```bash
-make lint      # ruff check src tests && mypy --strict src
+make lint      # ruff check, ruff format --check, mypy --strict
 ```
 
 CI runs on Python 3.13 for every push and pull request to `main`:
 
 1. `ruff check src tests`
-2. `mypy --strict src`
-3. `pytest` with the domain + application coverage gate (≥ 90%)
-4. `docker build` of the production image
+2. `ruff format --check src tests`
+3. `mypy --strict src`
+4. `pytest` with the domain + application coverage gate (≥ 90%)
+5. `docker build` of the production image
 
 `ruff` is configured with `E`, `F`, `I`, `UP`, `B`, `SIM` rule sets at a 100-character line length.
 

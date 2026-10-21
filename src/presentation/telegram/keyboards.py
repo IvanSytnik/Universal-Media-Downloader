@@ -149,7 +149,7 @@ def parse_confirm_callback(data: str) -> tuple[str, FormatKind, QualityKind]:
     Anything unrecognized degrades to (VIDEO, HD_720) rather than
     raising: a malformed or forged payload must not crash the handler.
     """
-    body = data[len(CB_CONFIRM_PREFIX):]
+    body = data[len(CB_CONFIRM_PREFIX) :]
     token, sep, code = body.rpartition(":")
     if not sep:
         # Legacy bare "dl:<token>" — rpartition put everything in `code`.

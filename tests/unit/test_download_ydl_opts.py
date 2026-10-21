@@ -37,9 +37,7 @@ def test_video_opts_request_merged_avc1_capped_at_default_720() -> None:
 
 
 def test_video_opts_respect_explicit_max_height_1080() -> None:
-    opts = _build_download_ydl_opts(
-        "/tmp/out", None, FormatKind.VIDEO, _noop_hook, max_height=1080
-    )
+    opts = _build_download_ydl_opts("/tmp/out", None, FormatKind.VIDEO, _noop_hook, max_height=1080)
     assert opts["format"] == (
         "bestvideo[height<=1080][vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]"
         "/best[ext=mp4][height<=1080]"
@@ -145,11 +143,17 @@ def test_the_two_tiers_produce_different_selectors() -> None:
     # Guards the degenerate pass: if both tiers resolved to one height,
     # every per-tier assertion above would still hold.
     opts_720 = _build_download_ydl_opts(
-        "/tmp/out", None, FormatKind.VIDEO, _noop_hook,
+        "/tmp/out",
+        None,
+        FormatKind.VIDEO,
+        _noop_hook,
         max_height=QualityKind.HD_720.max_height,
     )
     opts_1080 = _build_download_ydl_opts(
-        "/tmp/out", None, FormatKind.VIDEO, _noop_hook,
+        "/tmp/out",
+        None,
+        FormatKind.VIDEO,
+        _noop_hook,
         max_height=QualityKind.HD_1080.max_height,
     )
     assert opts_720["format"] != opts_1080["format"]
@@ -160,11 +164,17 @@ def test_audio_selector_ignores_the_tier_entirely() -> None:
     identical selector at either tier (the DB column carries a tier for
     audio rows too; nothing may read it into the format string)."""
     opts_720 = _build_download_ydl_opts(
-        "/tmp/out", None, FormatKind.AUDIO, _noop_hook,
+        "/tmp/out",
+        None,
+        FormatKind.AUDIO,
+        _noop_hook,
         max_height=QualityKind.HD_720.max_height,
     )
     opts_1080 = _build_download_ydl_opts(
-        "/tmp/out", None, FormatKind.AUDIO, _noop_hook,
+        "/tmp/out",
+        None,
+        FormatKind.AUDIO,
+        _noop_hook,
         max_height=QualityKind.HD_1080.max_height,
     )
     assert opts_720["format"] == opts_1080["format"]

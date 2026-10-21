@@ -30,6 +30,7 @@ Production hardening, enforced layer boundaries and repository polish.
 - Containers run as an unprivileged `app` user (uid 10001) instead of root.
 - Deno is copied from the official `denoland/deno` image at a pinned version, replacing `curl … | sh`.
 - Postgres and Redis host ports are bound to `127.0.0.1` only, so the default credentials are not reachable from the network.
+- Codebase formatted with `ruff format`; CI and `make lint` enforce it with `ruff format --check`.
 - CI runs `mypy --strict` explicitly and uses least-privilege `contents: read` permissions with concurrency cancellation.
 
 ### Security

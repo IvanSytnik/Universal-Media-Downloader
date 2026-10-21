@@ -127,9 +127,7 @@ _PHOTO_URL_MARKERS: tuple[str, ...] = ("/photo/", "/photos/", "/slideshow/")
 _PHOTO_MSG_MARKERS: tuple[str, ...] = ("slideshow", "photo mode", "image post")
 
 
-def classify_error(
-    message: str, url: str
-) -> type[ExtractionError] | type[UnsupportedURLError]:
+def classify_error(message: str, url: str) -> type[ExtractionError] | type[UnsupportedURLError]:
     """Return the domain exception *type* best matching this yt-dlp error.
 
     ``url`` is used only to disambiguate a bare "Unsupported URL": a

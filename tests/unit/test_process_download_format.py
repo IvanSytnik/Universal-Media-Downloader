@@ -34,9 +34,7 @@ class _CapturingDownloader:
     async def get_preview(self, url: str):  # pragma: no cover - unused here
         raise NotImplementedError
 
-    async def download(
-        self, url: str, options: DownloadOptions, progress_callback=None
-    ) -> Path:
+    async def download(self, url: str, options: DownloadOptions, progress_callback=None) -> Path:
         self.captured_options = options
         return Path("/tmp/out.bin")
 

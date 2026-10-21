@@ -130,9 +130,7 @@ class UserLocaleManager(BaseManager):
         await self._redis.set(f"{_LOCALE_CACHE_PREFIX}{event_from_user.id}", locale)
 
 
-def create_i18n_middleware(
-    core: FluentRuntimeCore, redis: Redis | None = None
-) -> I18nMiddleware:
+def create_i18n_middleware(core: FluentRuntimeCore, redis: Redis | None = None) -> I18nMiddleware:
     return I18nMiddleware(
         core=core,
         manager=UserLocaleManager(redis=redis, default_locale=DEFAULT_LOCALE),

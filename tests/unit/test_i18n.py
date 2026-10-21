@@ -100,10 +100,12 @@ async def test_every_key_resolves_in_every_locale(core) -> None:
 @pytest.mark.asyncio
 async def test_parametrized_keys_resolve(core) -> None:
     for locale in SUPPORTED_LOCALES:
-        assert core.get("help-text", locale, platforms="youtube.com",
-                        downloads=10, previews=5, filesize=50)
-        assert core.get("preview-card", locale, title="t", uploader="u",
-                        duration="1:00", mediatype="video")
+        assert core.get(
+            "help-text", locale, platforms="youtube.com", downloads=10, previews=5, filesize=50
+        )
+        assert core.get(
+            "preview-card", locale, title="t", uploader="u", duration="1:00", mediatype="video"
+        )
         assert core.get("error-bad-url", locale, reason="x")
         assert core.get("worker-ping-enqueued", locale, jobid="abc")
         assert core.get("progress-downloading", locale, percent=42)

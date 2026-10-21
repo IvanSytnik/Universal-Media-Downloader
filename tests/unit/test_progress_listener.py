@@ -41,7 +41,10 @@ def _pmessage(channel: str, payload: dict) -> dict:
 async def test_handle_message_edits_with_percent_text(i18n_core) -> None:
     bot = _CapturingBot()
     listener = TelegramProgressListener(
-        bot=bot, redis=object(), i18n_core=i18n_core, default_locale=DEFAULT_LOCALE  # type: ignore[arg-type]
+        bot=bot,
+        redis=object(),
+        i18n_core=i18n_core,
+        default_locale=DEFAULT_LOCALE,  # type: ignore[arg-type]
     )
     message = _pmessage(
         "umd:progress:req-1",
@@ -66,7 +69,10 @@ async def test_handle_message_edits_with_percent_text(i18n_core) -> None:
 async def test_handle_message_edits_with_nostream_text(i18n_core) -> None:
     bot = _CapturingBot()
     listener = TelegramProgressListener(
-        bot=bot, redis=object(), i18n_core=i18n_core, default_locale=DEFAULT_LOCALE  # type: ignore[arg-type]
+        bot=bot,
+        redis=object(),
+        i18n_core=i18n_core,
+        default_locale=DEFAULT_LOCALE,  # type: ignore[arg-type]
     )
     message = _pmessage(
         "umd:progress:req-2",
@@ -94,7 +100,10 @@ async def test_handle_message_edits_with_nostream_text(i18n_core) -> None:
 async def test_handle_message_ignores_non_pmessage(i18n_core) -> None:
     bot = _CapturingBot()
     listener = TelegramProgressListener(
-        bot=bot, redis=object(), i18n_core=i18n_core, default_locale=DEFAULT_LOCALE  # type: ignore[arg-type]
+        bot=bot,
+        redis=object(),
+        i18n_core=i18n_core,
+        default_locale=DEFAULT_LOCALE,  # type: ignore[arg-type]
     )
     await listener._handle_message({"type": "psubscribe", "channel": "umd:progress:*", "data": 1})
 
@@ -137,7 +146,10 @@ async def test_edit_message_suppresses_not_modified_error(i18n_core) -> None:
         raise_error=TelegramBadRequest(method=None, message="Bad Request: message is not modified")  # type: ignore[arg-type]
     )
     listener = TelegramProgressListener(
-        bot=bot, redis=object(), i18n_core=i18n_core, default_locale=DEFAULT_LOCALE  # type: ignore[arg-type]
+        bot=bot,
+        redis=object(),
+        i18n_core=i18n_core,
+        default_locale=DEFAULT_LOCALE,  # type: ignore[arg-type]
     )
 
     # Must not raise.
@@ -150,7 +162,10 @@ async def test_edit_message_reraises_other_bad_requests(i18n_core) -> None:
         raise_error=TelegramBadRequest(method=None, message="Bad Request: chat not found")  # type: ignore[arg-type]
     )
     listener = TelegramProgressListener(
-        bot=bot, redis=object(), i18n_core=i18n_core, default_locale=DEFAULT_LOCALE  # type: ignore[arg-type]
+        bot=bot,
+        redis=object(),
+        i18n_core=i18n_core,
+        default_locale=DEFAULT_LOCALE,  # type: ignore[arg-type]
     )
 
     # Non-"not modified" errors are logged, not raised — progress
@@ -162,7 +177,10 @@ async def test_edit_message_reraises_other_bad_requests(i18n_core) -> None:
 async def test_handle_message_bad_json_is_ignored(i18n_core) -> None:
     bot = _CapturingBot()
     listener = TelegramProgressListener(
-        bot=bot, redis=object(), i18n_core=i18n_core, default_locale=DEFAULT_LOCALE  # type: ignore[arg-type]
+        bot=bot,
+        redis=object(),
+        i18n_core=i18n_core,
+        default_locale=DEFAULT_LOCALE,  # type: ignore[arg-type]
     )
     await listener._handle_message(
         {"type": "pmessage", "channel": "umd:progress:req-4", "data": "not json"}
@@ -175,7 +193,10 @@ async def test_handle_message_bad_json_is_ignored(i18n_core) -> None:
 async def test_converting_phase_renders_converting_text(i18n_core) -> None:
     bot = _CapturingBot()
     listener = TelegramProgressListener(
-        bot=bot, redis=object(), i18n_core=i18n_core, default_locale=DEFAULT_LOCALE  # type: ignore[arg-type]
+        bot=bot,
+        redis=object(),
+        i18n_core=i18n_core,
+        default_locale=DEFAULT_LOCALE,  # type: ignore[arg-type]
     )
     message = _pmessage(
         "umd:progress:req-6",
@@ -229,7 +250,10 @@ async def test_converting_phase_bypasses_throttle(i18n_core) -> None:
 async def test_handle_message_missing_coordinates_is_ignored(i18n_core) -> None:
     bot = _CapturingBot()
     listener = TelegramProgressListener(
-        bot=bot, redis=object(), i18n_core=i18n_core, default_locale=DEFAULT_LOCALE  # type: ignore[arg-type]
+        bot=bot,
+        redis=object(),
+        i18n_core=i18n_core,
+        default_locale=DEFAULT_LOCALE,  # type: ignore[arg-type]
     )
     payload = {
         "percent": 10.0,

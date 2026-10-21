@@ -131,7 +131,9 @@ async def test_picker_offers_every_tier_plus_back(i18n: Any) -> None:
     message = _make_message()
 
     await handle_open_quality_picker(
-        _Callback(CB_QUALITY_PREFIX + TOKEN, message), i18n, store  # type: ignore[arg-type]
+        _Callback(CB_QUALITY_PREFIX + TOKEN, message),
+        i18n,
+        store,  # type: ignore[arg-type]
     )
 
     rows = message.markups[0].inline_keyboard
@@ -164,7 +166,9 @@ async def test_back_restores_the_format_keyboard(i18n: Any) -> None:
     message = _make_message()
 
     await handle_back_to_format(
-        _Callback(CB_BACK_PREFIX + TOKEN, message), i18n, store  # type: ignore[arg-type]
+        _Callback(CB_BACK_PREFIX + TOKEN, message),
+        i18n,
+        store,  # type: ignore[arg-type]
     )
 
     rows = message.markups[0].inline_keyboard
@@ -183,10 +187,14 @@ async def test_bouncing_between_steps_is_free(i18n: Any) -> None:
 
     for _ in range(3):
         await handle_open_quality_picker(
-            _Callback(CB_QUALITY_PREFIX + TOKEN, message), i18n, store  # type: ignore[arg-type]
+            _Callback(CB_QUALITY_PREFIX + TOKEN, message),
+            i18n,
+            store,  # type: ignore[arg-type]
         )
         await handle_back_to_format(
-            _Callback(CB_BACK_PREFIX + TOKEN, message), i18n, store  # type: ignore[arg-type]
+            _Callback(CB_BACK_PREFIX + TOKEN, message),
+            i18n,
+            store,  # type: ignore[arg-type]
         )
 
     assert len(message.markups) == 6
@@ -235,6 +243,4 @@ def test_quality_picker_keyboard_payloads_are_router_addressable() -> None:
 
     rows = quality_picker_keyboard(_Stub(), TOKEN).inline_keyboard  # type: ignore[arg-type]
     payloads = [b.callback_data for row in rows for b in row]
-    assert all(
-        p.startswith(("dl:", CB_BACK_PREFIX)) for p in payloads
-    ), payloads
+    assert all(p.startswith(("dl:", CB_BACK_PREFIX)) for p in payloads), payloads

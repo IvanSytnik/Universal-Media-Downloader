@@ -55,9 +55,7 @@ async def handle_start(
         # Confirms locale selection from real traffic — the language_code
         # a client sends often differs from its UI language, which is why
         # /language (explicit override) exists.
-        telegram_language_code=(
-            message.from_user.language_code if message.from_user else None
-        ),
+        telegram_language_code=(message.from_user.language_code if message.from_user else None),
         resolved_locale=i18n.locale,
     )
 
@@ -75,4 +73,3 @@ async def handle_help(message: Message, i18n: I18nContext, settings: Settings) -
 @router.message(lambda m: m.text == "/ping")
 async def handle_ping(message: Message) -> None:
     await message.answer("pong")
-

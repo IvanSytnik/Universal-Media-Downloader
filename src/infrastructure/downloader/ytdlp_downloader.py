@@ -793,9 +793,7 @@ class YtDlpDownloader:
             logger.warning("download_failed", url=url, error=str(exc), reason="too_large")
             # Domain FileTooLargeError carries the numbers as localizable
             # arguments (error-too-large FTL key), not a pre-baked string.
-            raise FileTooLargeError(
-                estimated_mb=exc.estimated_mb, limit_mb=exc.limit_mb
-            ) from exc
+            raise FileTooLargeError(estimated_mb=exc.estimated_mb, limit_mb=exc.limit_mb) from exc
         except _DownloadExtractError as exc:
             # A yt-dlp failure during the real download — classify it into
             # the same domain categories the preview path uses. Raw text

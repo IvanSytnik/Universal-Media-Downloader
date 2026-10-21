@@ -9,9 +9,7 @@ from src.presentation.telegram.i18n import UserLocaleManager
 
 
 def _tg_user(user_id: int, language_code: str | None) -> AiogramUser:
-    return AiogramUser(
-        id=user_id, is_bot=False, first_name="Test", language_code=language_code
-    )
+    return AiogramUser(id=user_id, is_bot=False, first_name="Test", language_code=language_code)
 
 
 class FakeRedis:

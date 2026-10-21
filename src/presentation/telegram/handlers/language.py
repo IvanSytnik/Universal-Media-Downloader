@@ -57,7 +57,7 @@ async def handle_language_choice(
     i18n: I18nContext,
     use_cases: UseCaseProvider,
 ) -> None:
-    chosen = (callback.data or "")[len(CB_LANG_PREFIX):]
+    chosen = (callback.data or "")[len(CB_LANG_PREFIX) :]
     if chosen not in SUPPORTED_LOCALES:
         # Defensive: only ever produced by our own keyboard, but never
         # trust callback_data blindly.

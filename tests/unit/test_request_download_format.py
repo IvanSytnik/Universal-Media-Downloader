@@ -64,9 +64,7 @@ async def test_defaults_to_video() -> None:
     queue = _FakeQueue()
     use_case = RequestDownloadUseCase(_FakeUserRepo(_make_user()), repo, queue)
 
-    request = await use_case.execute(
-        42, "https://youtube.com/watch?v=x", chat_id=1, message_id=2
-    )
+    request = await use_case.execute(42, "https://youtube.com/watch?v=x", chat_id=1, message_id=2)
 
     assert request.format_kind is FormatKind.VIDEO
     assert repo.created is not None
@@ -135,9 +133,7 @@ async def test_quality_defaults_to_720_when_caller_omits_it() -> None:
     queue = _FakeQueue()
     use_case = RequestDownloadUseCase(_FakeUserRepo(_make_user()), repo, queue)
 
-    request = await use_case.execute(
-        42, "https://youtube.com/watch?v=x", chat_id=1, message_id=2
-    )
+    request = await use_case.execute(42, "https://youtube.com/watch?v=x", chat_id=1, message_id=2)
 
     assert request.quality_kind is QualityKind.HD_720
     assert repo.created is not None

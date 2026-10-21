@@ -60,9 +60,7 @@ def _message(text: str, user_id: int | None = ADMIN_ID) -> _Message:
         message_id=1,
         date=datetime.now(UTC),
         chat=Chat(id=1, type="private"),
-        from_user=(
-            User(id=user_id, is_bot=False, first_name="t") if user_id is not None else None
-        ),
+        from_user=(User(id=user_id, is_bot=False, first_name="t") if user_id is not None else None),
         text=text,
     )
 
