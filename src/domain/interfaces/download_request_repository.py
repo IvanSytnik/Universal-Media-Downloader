@@ -8,10 +8,12 @@ Wired into a use case starting Day 5.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
 from src.domain.entities.download_request import DownloadRequest
+from src.domain.value_objects.stale_request import StaleRequest
 
 
 class DownloadRequestRepository(Protocol):
@@ -28,6 +30,25 @@ class DownloadRequestRepository(Protocol):
         precisely the case where the entity can't be built: a row whose
         stored status is unreadable (CorruptedRecordError). ``update``
         takes a DownloadRequest and so is unusable there.
+        """
+        ...
+
+    async def claim_for_processing(self, request_id: UUID) -> bool:
+        """Atomically move the request to PROCESSING if it is still
+        active (PENDING, or PROCESSING — an arq retry after a worker
+        crash), refreshing its last-update time. False when it is not:
+        finished, reaped, or gone. The caller must then not process it.
+
+        A compare-and-set, not read-then-write: it is what keeps a job
+        and the reaper from overwriting each other's transition.
+        """
+        ...
+
+    async def fail_stale(self, updated_before: datetime, limit: int) -> list[StaleRequest]:
+        """Move up to ``limit`` active requests last updated strictly
+        before ``updated_before`` to FAILED, oldest first, and return
+        them. Each row is transitioned at most once: a second call (or a
+        concurrent reaper) does not see it again.
         """
         ...
 

@@ -54,6 +54,9 @@ class _CorruptedRequestRepo:
             user_id=self._user_id,
         )
 
+    async def claim_for_processing(self, request_id: UUID) -> bool:  # pragma: no cover
+        raise AssertionError("a corrupted record must not be claimed")
+
     async def update(self, request: object) -> None:  # pragma: no cover - must not run
         self.updated.append(request)
 

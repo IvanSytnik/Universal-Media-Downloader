@@ -37,6 +37,9 @@ class _FakeRequestRepo:
     async def get_by_id(self, request_id: UUID) -> DownloadRequest | None:
         return self._request if request_id == self._request.id else None
 
+    async def claim_for_processing(self, request_id: UUID) -> bool:
+        return True
+
     async def update(self, request: DownloadRequest) -> None:
         pass
 
@@ -224,6 +227,10 @@ class _StatusRepo(_FakeRequestRepo):
     def __init__(self, request: DownloadRequest, log: _Log) -> None:
         super().__init__(request)
         self._log = log
+
+    async def claim_for_processing(self, request_id: UUID) -> bool:
+        self._log.events.append("status:processing")
+        return True
 
     async def update(self, request: DownloadRequest) -> None:
         self._log.events.append(f"status:{request.status.value}")

@@ -61,6 +61,9 @@ class _Repo:
             raise self._exc
         return self._request
 
+    async def claim_for_processing(self, request_id: UUID) -> bool:
+        return True
+
     async def update(self, request: DownloadRequest) -> None:
         return None
 

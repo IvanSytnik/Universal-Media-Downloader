@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Index, String
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -56,11 +56,23 @@ class DownloadRequestModel(Base):
     video_tier: Mapped[str | None] = mapped_column(String(10), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Last status transition — the reaper's liveness signal (migration
+    # 0006). Written by the repository on every transition, NOT by an
+    # `onupdate`: an arq retry re-claims a PROCESSING row without
+    # changing its status, and that must still refresh it.
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     user: Mapped[UserModel] = relationship(back_populates="download_requests")
 
     __table_args__ = (
         Index("ix_download_requests_user_id", "user_id"),
+        # Only active rows — the reaper's whole query (migration 0006).
+        Index(
+            "ix_download_requests_active_updated_at",
+            "updated_at",
+            postgresql_where=text("status IN ('pending', 'processing')"),
+            sqlite_where=text("status IN ('pending', 'processing')"),
+        ),
         CheckConstraint(
             "(format_kind = 'video') = (video_tier IS NOT NULL)",
             name="ck_download_requests_video_tier_kind",

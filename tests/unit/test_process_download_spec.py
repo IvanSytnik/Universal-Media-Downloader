@@ -56,6 +56,9 @@ class _FakeRequestRepo:
     async def get_by_id(self, request_id: UUID) -> DownloadRequest | None:
         return self._request
 
+    async def claim_for_processing(self, request_id: UUID) -> bool:
+        return True
+
     async def update(self, request: DownloadRequest) -> None:
         return None
 

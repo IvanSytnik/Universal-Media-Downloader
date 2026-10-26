@@ -93,7 +93,7 @@ jobs:
       - name: Migration test (upgrade / downgrade on PostgreSQL)
         run: |
           set -o pipefail
-          pytest -v -rs tests/integration/test_migration_0005.py | tee pytest.out
+          pytest -v -rs tests/integration/test_migration_0005.py tests/integration/test_migration_0006.py | tee pytest.out
           ! grep -q SKIPPED pytest.out
 
   docker-build:

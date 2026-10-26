@@ -118,3 +118,21 @@ def test_preview_timeout_must_be_positive() -> None:
             preview_timeout_seconds=0,
             _env_file=None,  # type: ignore[call-arg]
         )
+
+
+def test_stale_request_grace_defaults_to_300_seconds() -> None:
+    settings = Settings(
+        bot_token="test-token",  # type: ignore[arg-type]
+        _env_file=None,  # type: ignore[call-arg]
+    )
+
+    assert settings.stale_request_grace_seconds == 300
+
+
+def test_stale_request_grace_must_be_positive() -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            bot_token="test-token",  # type: ignore[arg-type]
+            stale_request_grace_seconds=0,
+            _env_file=None,  # type: ignore[call-arg]
+        )

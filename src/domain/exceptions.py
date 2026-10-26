@@ -159,6 +159,20 @@ class FormatNotAllowedError(DownloaderError):
     error_key = "error-format-not-allowed"
 
 
+class StaleRequestError(DownloaderError):
+    """A request sat in pending/processing past any live job's lifetime
+    (worker crash, arq cancelling at ``job_timeout``, a lost queue
+    message) and the reaper failed it.
+
+    Never raised: the reaper finds these rows, nothing throws. It is a
+    class for the same reason ``FormatNotAllowedError`` is one — the
+    domain's error keys live on its error types, and this is where a
+    reader looks for them.
+    """
+
+    error_key = "error-request-stale"
+
+
 class NotifierError(Exception):
     """Delivering a result to the user failed (file too large, user
     blocked the bot, Telegram API error, etc.)."""

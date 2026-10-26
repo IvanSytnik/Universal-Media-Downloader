@@ -52,6 +52,10 @@ class FakeDownloadRequestRepository:
     async def create(self, download_request: DownloadRequest) -> DownloadRequest:
         raise NotImplementedError
 
+    async def claim_for_processing(self, request_id: UUID) -> bool:
+        self.updates.append(DownloadStatus.PROCESSING)
+        return True
+
     async def update(self, download_request: DownloadRequest) -> None:
         self.updates.append(download_request.status)
 
@@ -236,3 +240,40 @@ async def test_unknown_request_id_is_a_noop(i18n_core) -> None:
     assert request_repo.updates == []
     assert notifier.sent_files == []
     assert notifier.sent_texts == []
+
+
+class _InactiveRequestRepository(FakeDownloadRequestRepository):
+    """The claim fails: the reaper already failed the request, or a
+    duplicate job finds it finished."""
+
+    async def claim_for_processing(self, request_id: UUID) -> bool:
+        return False
+
+
+class _NeverCalledDownloader(FakeDownloader):
+    async def download(self, url, options, progress_callback=None) -> DownloadResult:
+        raise AssertionError("an inactive request must not be downloaded")
+
+
+@pytest.mark.asyncio
+async def test_request_that_cannot_be_claimed_is_skipped_silently(i18n_core) -> None:
+    request, user = _make_request_and_user()
+    request_repo = _InactiveRequestRepository(request)
+    notifier = FakeNotifier()
+    publisher = FakeProgressPublisher()
+
+    await _use_case(
+        request_repo,
+        FakeUserRepository(user),
+        _NeverCalledDownloader(),
+        notifier,
+        FakeErrorLocalizer(i18n_core),
+        publisher,
+    ).execute(request.id, _CHAT_ID, _MESSAGE_ID)
+
+    # The user was already told (by the reaper); nothing else happens.
+    assert request_repo.updates == []
+    assert notifier.sent_texts == []
+    assert notifier.sent_files == []
+    assert publisher.calls == []
+    assert request.status == DownloadStatus.PENDING

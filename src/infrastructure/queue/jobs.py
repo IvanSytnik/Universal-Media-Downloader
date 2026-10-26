@@ -10,6 +10,11 @@ lifetime.
 Day 11B: `download_job` gains `chat_id`/`message_id` — the coordinates
 of the message to edit with progress, threaded in from
 RequestDownloadUseCase's enqueue call (see TaskQueue docstring).
+
+Stale-request reaper (ADR 0004): `download_job` no longer wraps the use
+case in one transaction — its repositories commit per call
+(transactional.py), so PROCESSING is visible and durable the moment the
+job claims the request. `reap_stale_requests_job` runs on cron.
 """
 
 from __future__ import annotations
@@ -20,16 +25,21 @@ from typing import Any
 from uuid import UUID
 
 from src.application.use_cases.process_download import ProcessDownloadUseCase
-from src.infrastructure.database.engine import session_scope
-from src.infrastructure.database.repositories.download_request_repository import (
-    SqlAlchemyDownloadRequestRepository,
+from src.application.use_cases.reap_stale_requests import ReapStaleRequestsUseCase
+from src.infrastructure.database.repositories.transactional import (
+    TransactionalDownloadRequestRepository,
+    TransactionalUserRepository,
 )
-from src.infrastructure.database.repositories.user_repository import SqlAlchemyUserRepository
 from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
 
 LAST_PING_REDIS_KEY = "worker:last_ping"
+
+# Rows per reaper tick. Far above anything a healthy beta produces in 5
+# minutes; a backlog (first tick after an outage) drains over a few ticks
+# instead of one burst of Telegram messages.
+REAPER_BATCH_SIZE = 100
 
 
 async def ping_job(ctx: dict[str, Any], message: str) -> dict[str, str]:
@@ -45,20 +55,36 @@ async def ping_job(ctx: dict[str, Any], message: str) -> dict[str, str]:
 
 async def download_job(ctx: dict[str, Any], request_id: str, chat_id: int, message_id: int) -> None:
     session_factory = ctx["session_factory"]
+    use_case = ProcessDownloadUseCase(
+        download_request_repository=TransactionalDownloadRequestRepository(session_factory),
+        user_repository=TransactionalUserRepository(session_factory),
+        downloader=ctx["downloader"],
+        storage=ctx["storage"],
+        notifier=ctx["notifier"],
+        error_localizer=ctx["error_localizer"],
+        progress_publisher=ctx["progress_publisher"],
+        max_deliverable_file_size_bytes=ctx["max_deliverable_file_size_bytes"],
+        download_timeout_seconds=ctx["download_timeout_seconds"],
+    )
+    await use_case.execute(UUID(request_id), chat_id, message_id)
 
-    async with session_scope(session_factory) as session:
-        use_case = ProcessDownloadUseCase(
-            download_request_repository=SqlAlchemyDownloadRequestRepository(session),
-            user_repository=SqlAlchemyUserRepository(session),
-            downloader=ctx["downloader"],
-            storage=ctx["storage"],
-            notifier=ctx["notifier"],
-            error_localizer=ctx["error_localizer"],
-            progress_publisher=ctx["progress_publisher"],
-            max_deliverable_file_size_bytes=ctx["max_deliverable_file_size_bytes"],
-            download_timeout_seconds=ctx["download_timeout_seconds"],
-        )
-        await use_case.execute(UUID(request_id), chat_id, message_id)
+
+async def reap_stale_requests_job(ctx: dict[str, Any]) -> int:
+    """Cron (see worker_settings.py). Returns how many requests it failed."""
+    session_factory = ctx["session_factory"]
+    use_case = ReapStaleRequestsUseCase(
+        download_request_repository=TransactionalDownloadRequestRepository(session_factory),
+        user_repository=TransactionalUserRepository(session_factory),
+        notifier=ctx["notifier"],
+        error_localizer=ctx["error_localizer"],
+        stale_after=ctx["stale_request_after"],
+        batch_size=REAPER_BATCH_SIZE,
+        clock=lambda: datetime.now(UTC),
+    )
+    reaped = await use_case.execute()
+    if reaped:
+        logger.info("stale_requests_reaped", count=len(reaped))
+    return len(reaped)
 
 
 async def cleanup_expired_downloads_job(ctx: dict[str, Any]) -> None:

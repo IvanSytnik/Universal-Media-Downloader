@@ -50,6 +50,13 @@ once the request's status is saved — through the same
 says "sent" / "failed"; the failure reason still goes out as its own
 message via the notifier, the reliable path. A publish that fails is
 logged and ignored: the card is cosmetic, the delivery is not.
+
+Stale-request reaper (ADR 0004) — the start is a CLAIM, not a write.
+``claim_for_processing`` moves the request to PROCESSING only if it is
+still active; a request the reaper already failed (or a duplicate job
+for a finished one) is skipped without downloading or messaging
+anything — the user has already been told. An arq retry after a worker
+crash finds it PROCESSING and re-claims it, as before.
 """
 
 from __future__ import annotations
@@ -213,8 +220,14 @@ class ProcessDownloadUseCase:
             logger.warning("process_download_user_not_found", request_id=str(request_id))
             return
 
+        if not await self._download_request_repository.claim_for_processing(request.id):
+            logger.warning(
+                "process_download_skipped_inactive",
+                request_id=str(request_id),
+                status=request.status,
+            )
+            return
         request.mark_processing()
-        await self._download_request_repository.update(request)
 
         output_dir = self._storage.temp_dir_for_request(request.id)
         options = DownloadOptions(

@@ -48,6 +48,13 @@ the writer already guarantees. The spec pair DOES get one
 cross-column invariant the old schema could not express, and pinning it
 in the schema makes the backfill provably complete. Unknown tier VALUES
 still pass the CHECK, so the read path keeps its guard regardless.
+
+Stale-request reaper (ops minimum, ADR 0004). Every write that changes a
+request's status also stamps ``updated_at`` — the reaper's only liveness
+signal. The two transitions a job and the reaper can race on are
+compare-and-set UPDATEs (``claim_for_processing``, ``fail_stale``), each
+re-checking "still active" in its WHERE, so whichever commits second
+finds nothing to do instead of overwriting the first.
 """
 
 from __future__ import annotations
@@ -55,7 +62,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.domain.entities.download_request import DownloadRequest
@@ -67,10 +74,13 @@ from src.domain.value_objects.download_spec import (
     spec_video_tier,
 )
 from src.domain.value_objects.enums import DownloadStatus, MediaType
+from src.domain.value_objects.stale_request import StaleRequest
 from src.infrastructure.database.models import DownloadRequestModel
 from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
+
+_ACTIVE_STATUSES = (DownloadStatus.PENDING, DownloadStatus.PROCESSING)
 
 
 def _degraded(
@@ -167,6 +177,7 @@ class SqlAlchemyDownloadRequestRepository:
             status=download_request.status.value,
             format_kind=spec_kind(download_request.spec).value,
             video_tier=_tier_value(download_request.spec),
+            updated_at=datetime.now(UTC),
         )
         self._session.add(model)
         await self._session.flush()
@@ -178,6 +189,7 @@ class SqlAlchemyDownloadRequestRepository:
             raise ValueError(f"DownloadRequest {download_request.id} not found")
         model.status = download_request.status
         model.completed_at = download_request.completed_at
+        model.updated_at = datetime.now(UTC)
         await self._session.flush()
 
     async def mark_failed_by_id(self, request_id: UUID) -> None:
@@ -194,8 +206,72 @@ class SqlAlchemyDownloadRequestRepository:
         if model is None:
             return
         model.status = DownloadStatus.FAILED
-        model.completed_at = datetime.now(UTC)
+        model.completed_at = model.updated_at = datetime.now(UTC)
         await self._session.flush()
+
+    async def claim_for_processing(self, request_id: UUID) -> bool:
+        result = await self._session.execute(
+            update(DownloadRequestModel)
+            .where(
+                DownloadRequestModel.id == request_id,
+                DownloadRequestModel.status.in_(_ACTIVE_STATUSES),
+            )
+            .values(status=DownloadStatus.PROCESSING, updated_at=datetime.now(UTC))
+            .returning(DownloadRequestModel.id)
+        )
+        return result.scalar_one_or_none() is not None
+
+    async def fail_stale(self, updated_before: datetime, limit: int) -> list[StaleRequest]:
+        """Two steps in the caller's transaction. The SELECT takes row
+        locks and SKIPs rows another transaction holds (a job mid-claim)
+        rather than waiting on them; the UPDATE re-checks the same
+        condition, so a row that changed in between is left alone.
+        SQLite (tests) ignores FOR UPDATE; the re-check alone keeps it
+        correct there.
+        """
+        candidates = (
+            await self._session.execute(
+                select(
+                    DownloadRequestModel.id,
+                    DownloadRequestModel.user_id,
+                    DownloadRequestModel.status,
+                )
+                .where(
+                    DownloadRequestModel.status.in_(_ACTIVE_STATUSES),
+                    DownloadRequestModel.updated_at < updated_before,
+                )
+                .order_by(DownloadRequestModel.updated_at)
+                .limit(limit)
+                .with_for_update(skip_locked=True)
+            )
+        ).all()
+        if not candidates:
+            return []
+
+        now = datetime.now(UTC)
+        reaped = set(
+            (
+                await self._session.execute(
+                    update(DownloadRequestModel)
+                    .where(
+                        DownloadRequestModel.id.in_([row.id for row in candidates]),
+                        DownloadRequestModel.status.in_(_ACTIVE_STATUSES),
+                        DownloadRequestModel.updated_at < updated_before,
+                    )
+                    .values(status=DownloadStatus.FAILED, completed_at=now, updated_at=now)
+                    .returning(DownloadRequestModel.id)
+                )
+            ).scalars()
+        )
+        return [
+            StaleRequest(
+                request_id=row.id,
+                user_id=row.user_id,
+                previous_status=DownloadStatus(row.status),
+            )
+            for row in candidates
+            if row.id in reaped
+        ]
 
     async def list_by_user(self, user_id: UUID, limit: int = 20) -> list[DownloadRequest]:
         """Rows the user can be shown. Unreadable ones are skipped, not

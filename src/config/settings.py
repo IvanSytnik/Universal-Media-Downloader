@@ -130,6 +130,12 @@ class Settings(BaseSettings):
     # a child process that is terminate()'d when this expires.
     preview_timeout_seconds: int = Field(default=60, gt=0)
 
+    # Stale-request reaper (ADR 0004): a pending/processing request whose
+    # last update is older than the worker's job_timeout plus this grace
+    # is failed and its user notified. The grace absorbs clock skew and
+    # the tail of a job arq is cancelling at job_timeout.
+    stale_request_grace_seconds: int = Field(default=300, gt=0)
+
     # Single source of truth for the deliverable file size limit — was
     # previously duplicated as a hardcoded constant in both
     # TelegramNotifier and ProcessDownloadUseCase (a real DRY violation

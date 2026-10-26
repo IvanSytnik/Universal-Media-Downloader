@@ -106,6 +106,8 @@ error-preview-timeout = Couldn't fetch the link's details in time. Please try ag
 error-too-large = This video is too large for Telegram (~{ $estimated_mb } MB, limit { $limit_mb } MB).
 # Delivery (downloaded but couldn't send) — worker path.
 error-delivery-failed = I downloaded the video but couldn't send it to Telegram. Please try again later.
+# Reaper: the request stalled (worker crash or an unfinished job) and was closed.
+error-request-stale = I couldn't finish this request — it got stuck and was cancelled. Please send the link again.
 # Internal failure on our side (Day 11C.3): a database row is unreadable.
 # Nothing for the user to act on, so keep it short and free of
 # diagnostics (bug #6) — those go to the log.

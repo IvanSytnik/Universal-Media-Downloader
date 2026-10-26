@@ -24,6 +24,7 @@ from src.domain.exceptions import (
 )
 from src.domain.value_objects.deliverable_media import DeliverableMedia
 from src.domain.value_objects.download_result import DownloadResult
+from src.domain.value_objects.enums import DownloadStatus
 from src.infrastructure.localization.fluent_error_localizer import FluentErrorLocalizer
 from src.presentation.telegram.i18n import DEFAULT_LOCALE, create_i18n_core
 
@@ -63,6 +64,10 @@ class _RequestRepo:
 
     async def get_by_id(self, request_id: UUID) -> DownloadRequest:
         return self._request
+
+    async def claim_for_processing(self, request_id: UUID) -> bool:
+        self.updated.append(DownloadStatus.PROCESSING)
+        return True
 
     async def update(self, request: DownloadRequest) -> None:
         # DownloadStatus is a StrEnum, so the recorded values compare
