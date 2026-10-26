@@ -38,7 +38,11 @@ def validate_url(raw_url: str) -> str:
     return url
 
 
-def validate_url_against_allowlist(raw_url: str, allowed_domains: frozenset[str]) -> str:
+def validate_url_against_allowlist(
+    raw_url: str,
+    allowed_domains: frozenset[str],
+    blocked_domains: frozenset[str] = frozenset(),
+) -> str:
     """Structural validation + domain allowlist check (SECURITY.md:
     "allowlist поддерживаемых доменов, а не blacklist").
 
@@ -55,21 +59,31 @@ def validate_url_against_allowlist(raw_url: str, allowed_domains: frozenset[str]
     hatch for local development, configured via Settings, never the
     production default.
 
+    ``blocked_domains`` carves exceptions out of the allowlist, with the
+    same suffix matching, and wins over it (also over an empty
+    allowlist). It exists for subdomains the allowlist admits by suffix
+    but that nothing downstream can tell apart: ``music.youtube.com``
+    resolves to the same yt-dlp extractor as YouTube, so the per-extractor
+    FormatPolicy cannot exclude it — only the URL can. A blocked site is
+    refused with the same message as an unsupported one.
+
     Raises:
         UnsupportedURLError: structurally invalid URL or domain not allowed.
     """
     url = validate_url(raw_url)
-
-    if not allowed_domains:
-        return url
-
     hostname = (urlparse(url).hostname or "").lower().rstrip(".")
 
-    for domain in allowed_domains:
-        d = domain.lower().lstrip(".")
-        if hostname == d or hostname.endswith("." + d):
-            return url
+    blocked = any(_host_matches(hostname, domain) for domain in blocked_domains)
+    if not blocked and (
+        not allowed_domains or any(_host_matches(hostname, d) for d in allowed_domains)
+    ):
+        return url
 
     raise UnsupportedURLError(
         "Этот сайт не поддерживается. Поддерживаемые: " + ", ".join(sorted(allowed_domains))
     )
+
+
+def _host_matches(hostname: str, domain: str) -> bool:
+    d = domain.lower().lstrip(".")
+    return hostname == d or hostname.endswith("." + d)

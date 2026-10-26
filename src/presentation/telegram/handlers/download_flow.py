@@ -125,7 +125,9 @@ async def _show_preview(
     """Shared preview step for both entry points. Validation runs BEFORE
     the rate-limit check so a typo doesn't burn a preview slot."""
     try:
-        validated_url = validate_url_against_allowlist(url, settings.allowed_domains_set)
+        validated_url = validate_url_against_allowlist(
+            url, settings.allowed_domains_set, settings.blocked_domains_set
+        )
     except UnsupportedURLError as exc:
         # Origin 1: OUR validator. `reason` is our own safe text — keep it.
         await message.answer(i18n.get("error-bad-url", reason=html_escape(str(exc))))

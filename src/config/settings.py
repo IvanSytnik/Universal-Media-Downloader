@@ -71,6 +71,12 @@ class Settings(BaseSettings):
             "vk.com",
         ]
     )
+    # Exceptions to the allowlist, same suffix match, checked first. For
+    # subdomains the allowlist admits but nothing downstream can tell
+    # apart: YouTube Music is extracted as plain "youtube", so a
+    # per-extractor rule can't exclude it. Override via env:
+    # BLOCKED_DOMAINS='["music.youtube.com"]'
+    blocked_domains: list[str] = Field(default=["music.youtube.com"])
     # How long a shown preview stays actionable (the ✅ button under it).
     # After the TTL the stored URL expires in Redis and the button
     # politely reports that the preview is stale.
@@ -155,6 +161,10 @@ class Settings(BaseSettings):
     @property
     def allowed_domains_set(self) -> frozenset[str]:
         return frozenset(self.allowed_domains)
+
+    @property
+    def blocked_domains_set(self) -> frozenset[str]:
+        return frozenset(self.blocked_domains)
 
     @property
     def admin_telegram_ids_set(self) -> frozenset[int]:
