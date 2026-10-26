@@ -46,11 +46,12 @@ COPY --from=denoland/deno:bin-2.5.6 /deno /usr/local/bin/deno
 # Unprivileged runtime user. /tmp/umd-downloads is the worker's download
 # directory (DOWNLOAD_STORAGE_DIR) and the mount point of the shared
 # download_storage volume; creating it here owned by `app` means a fresh
-# named volume inherits that ownership.
+# named volume inherits that ownership. /var/log/umd is LOG_DIR, the
+# mount point of the app_logs volume — same reason (ADR 0006).
 RUN groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --create-home --home-dir /home/app app \
-    && mkdir -p /tmp/umd-downloads \
-    && chown app:app /tmp/umd-downloads
+    && mkdir -p /tmp/umd-downloads /var/log/umd \
+    && chown app:app /tmp/umd-downloads /var/log/umd
 
 ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONPATH=/app \

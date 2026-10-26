@@ -5,6 +5,7 @@ no network at all.
 from __future__ import annotations
 
 import pytest
+import structlog
 
 from src.application.use_cases.preview_download import PreviewDownloadUseCase
 from src.domain.exceptions import ExtractionError, UnsupportedURLError
@@ -45,6 +46,8 @@ async def test_returns_preview_for_valid_url() -> None:
 
     assert result == expected
     assert downloader.requested_urls == ["https://example.com/video"]
+    # Later errors in the same update are attributable to the source (ADR 0006).
+    assert structlog.contextvars.get_contextvars()["extractor_key"] == "youtube"
 
 
 @pytest.mark.asyncio

@@ -39,6 +39,7 @@ from src.domain.interfaces.task_queue import TaskQueue
 from src.domain.interfaces.user_repository import UserRepository
 from src.domain.value_objects.download_spec import DownloadSpec
 from src.domain.value_objects.url_validation import validate_url
+from src.shared.logging import bind_log_context
 
 
 class RequestDownloadUseCase:
@@ -81,6 +82,9 @@ class RequestDownloadUseCase:
             source_url=validated_url,
             spec=spec,
         )
+        # The rest of this update's log lines and Sentry events carry
+        # both (ADR 0006).
+        bind_log_context(request_id=str(request.id), extractor_key=extractor_key)
         await self._download_request_repository.create(request)
         await self._task_queue.enqueue_download(request.id, chat_id, message_id)
 

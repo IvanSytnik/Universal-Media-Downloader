@@ -7,6 +7,7 @@ should be hardcoded anywhere else in the codebase.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator
@@ -29,6 +30,16 @@ class Settings(BaseSettings):
     # --- Environment ---
     environment: str = Field(default="local", description="local | staging | production")
     log_level: str = Field(default="INFO")
+
+    # --- Observability (ADR 0006) ---
+    # Directory for the rotating JSON log file `<service>.log` (bot.log,
+    # worker.log), in addition to stdout. Unset = stdout only. In Docker
+    # it is a named volume (docker-compose.yml), so `down`/`up -d` keep it.
+    log_dir: Path | None = Field(default=None)
+    log_file_max_mb: int = Field(default=50, gt=0)
+    log_file_backups: int = Field(default=10, ge=1)
+    # Sentry is off unless a DSN is set. Errors only, no tracing, no PII.
+    sentry_dsn: SecretStr | None = Field(default=None)
 
     # --- Telegram ---
     bot_token: SecretStr = Field(..., description="Telegram Bot API token from @BotFather")
@@ -182,6 +193,15 @@ class Settings(BaseSettings):
         """
         return self.postgres_dsn.replace("postgresql://", "postgresql+asyncpg://", 1)
 
+    @field_validator("sentry_dsn", "log_dir", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, value: object) -> object:
+        # `SENTRY_DSN=` / `LOG_DIR=` in .env (as in .env.example) mean
+        # "off", not an empty DSN or the current directory.
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @field_validator("disabled_formats")
     @classmethod
     def _lowercase_extractor_keys(
@@ -204,6 +224,10 @@ class Settings(BaseSettings):
     @property
     def admin_telegram_ids_set(self) -> frozenset[int]:
         return frozenset(self.admin_telegram_ids)
+
+    @property
+    def log_file_max_bytes(self) -> int:
+        return self.log_file_max_mb * 1024 * 1024
 
     @property
     def download_min_free_disk_bytes(self) -> int:

@@ -34,6 +34,7 @@ from src.infrastructure.database.engine import create_engine, create_session_fac
 from src.infrastructure.downloader.ytdlp_downloader import YtDlpDownloader
 from src.infrastructure.localization.fluent_error_localizer import FluentErrorLocalizer
 from src.infrastructure.notifier.telegram_notifier import TelegramNotifier
+from src.infrastructure.observability.sentry import init_sentry
 from src.infrastructure.progress.redis_progress_publisher import RedisProgressPublisher
 from src.infrastructure.queue.jobs import (
     cleanup_expired_downloads_job,
@@ -73,11 +74,20 @@ JOB_TIMEOUT_SECONDS = 2100
 
 
 async def startup(ctx: dict[str, Any]) -> None:
-    configure_logging(log_level=settings.log_level, environment=settings.environment)
+    configure_logging(
+        log_level=settings.log_level,
+        environment=settings.environment,
+        service="worker",
+        log_dir=settings.log_dir,
+        log_file_max_bytes=settings.log_file_max_bytes,
+        log_file_backups=settings.log_file_backups,
+    )
+    sentry_enabled = init_sentry(settings, service="worker")
     logger.info(
         "worker_starting",
         environment=settings.environment,
         use_local_bot_api=settings.use_local_bot_api,
+        sentry=sentry_enabled,
     )
 
     engine = create_engine(settings)

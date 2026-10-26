@@ -162,3 +162,38 @@ def test_download_min_free_disk_zero_disables_and_negative_is_rejected() -> None
             download_min_free_disk_mb=-1,
             _env_file=None,  # type: ignore[call-arg]
         )
+
+
+def test_observability_is_off_by_default() -> None:
+    settings = Settings(
+        bot_token="test-token",  # type: ignore[arg-type]
+        _env_file=None,  # type: ignore[call-arg]
+    )
+
+    assert settings.log_dir is None
+    assert settings.sentry_dsn is None
+    assert settings.log_file_max_bytes == 50 * 1024 * 1024
+    assert settings.log_file_backups == 10
+
+
+def test_log_rotation_bounds_are_validated() -> None:
+    for field, value in (("log_file_max_mb", 0), ("log_file_backups", 0)):
+        with pytest.raises(ValidationError):
+            Settings(
+                bot_token="test-token",  # type: ignore[arg-type]
+                _env_file=None,  # type: ignore[call-arg]
+                **{field: value},
+            )
+
+
+def test_blank_sentry_dsn_and_log_dir_mean_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SENTRY_DSN", "")
+    monkeypatch.setenv("LOG_DIR", "  ")
+
+    settings = Settings(
+        bot_token="test-token",  # type: ignore[arg-type]
+        _env_file=None,  # type: ignore[call-arg]
+    )
+
+    assert settings.sentry_dsn is None
+    assert settings.log_dir is None

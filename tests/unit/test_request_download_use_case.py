@@ -5,6 +5,7 @@ from __future__ import annotations
 from uuid import UUID
 
 import pytest
+import structlog
 
 from src.application.policies.format_policy import FormatPolicy
 from src.application.use_cases.request_download import RequestDownloadUseCase
@@ -94,6 +95,10 @@ async def test_creates_request_for_existing_user() -> None:
     assert request.source_url == "https://example.com/video"
     assert request in request_repo.created
     assert task_queue.enqueued_download_ids == [request.id]
+    # The rest of the update's logs and Sentry events carry both (ADR 0006).
+    context = structlog.contextvars.get_contextvars()
+    assert context["request_id"] == str(request.id)
+    assert context["extractor_key"] == "youtube"
 
 
 @pytest.mark.asyncio

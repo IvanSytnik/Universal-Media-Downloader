@@ -72,6 +72,15 @@ services:
       dockerfile: infra/docker/bot.Dockerfile
     env_file:
       - .env
+    # Persistent JSON logs (ADR 0006): /var/log/umd/bot.log, rotated.
+    # A named volume, not ./logs: the container runs as uid 10001, and a
+    # fresh named volume inherits the image directory's ownership.
+    # Survives `down` / `up -d`; only `down -v` removes it. Read with:
+    #   docker compose exec bot tail -f /var/log/umd/bot.log
+    environment:
+      LOG_DIR: /var/log/umd
+    volumes:
+      - app_logs:/var/log/umd
     depends_on:
       postgres:
         condition: service_healthy
@@ -92,7 +101,11 @@ services:
     command: ["arq", "src.infrastructure.queue.worker_settings.WorkerSettings"]
     env_file:
       - .env
+    environment:
+      LOG_DIR: /var/log/umd
     volumes:
+      # Persistent logs, see the bot service: /var/log/umd/worker.log.
+      - app_logs:/var/log/umd
       # Общий с telegram-bot-api (см. комментарий там) — только когда
       # используется локальный сервер, но монтируем всегда: дёшево и
       # не требует пересборки при переключении USE_LOCAL_BOT_API.
@@ -115,3 +128,4 @@ services:
 volumes:
   postgres_data:
   download_storage:
+  app_logs:

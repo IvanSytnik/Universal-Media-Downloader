@@ -30,7 +30,7 @@ from src.infrastructure.database.repositories.transactional import (
     TransactionalDownloadRequestRepository,
     TransactionalUserRepository,
 )
-from src.shared.logging import get_logger
+from src.shared.logging import bind_log_context, clear_log_context, get_logger
 
 logger = get_logger(__name__)
 
@@ -54,6 +54,8 @@ async def ping_job(ctx: dict[str, Any], message: str) -> dict[str, str]:
 
 
 async def download_job(ctx: dict[str, Any], request_id: str, chat_id: int, message_id: int) -> None:
+    clear_log_context()
+    bind_log_context(job="download_job", request_id=request_id)
     session_factory = ctx["session_factory"]
     use_case = ProcessDownloadUseCase(
         download_request_repository=TransactionalDownloadRequestRepository(session_factory),
@@ -72,6 +74,8 @@ async def download_job(ctx: dict[str, Any], request_id: str, chat_id: int, messa
 
 async def reap_stale_requests_job(ctx: dict[str, Any]) -> int:
     """Cron (see worker_settings.py). Returns how many requests it failed."""
+    clear_log_context()
+    bind_log_context(job="reap_stale_requests_job")
     session_factory = ctx["session_factory"]
     use_case = ReapStaleRequestsUseCase(
         download_request_repository=TransactionalDownloadRequestRepository(session_factory),
@@ -99,6 +103,8 @@ async def cleanup_expired_downloads_job(ctx: dict[str, Any]) -> None:
     touching its files. Low free space is logged here too — the per-job
     check refuses downloads, this line is what an operator sees.
     """
+    clear_log_context()
+    bind_log_context(job="cleanup_expired_downloads_job")
     storage = ctx["storage"]
     max_age = int(ctx["stale_request_after"].total_seconds())
     removed = await storage.cleanup_expired(max_age_seconds=max_age)

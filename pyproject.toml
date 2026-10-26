@@ -19,6 +19,8 @@ dependencies = [
     "alembic>=1.13,<2.0",
     "arq>=0.26,<1.0",
     "yt-dlp>=2026.08.19",
+    # Opt-in error reporting (SENTRY_DSN); inert when unset. ADR 0006.
+    "sentry-sdk>=2.20,<3",
 ]
 
 [project.optional-dependencies]

@@ -25,6 +25,7 @@ from src.domain.value_objects.format_kind import FormatKind
 from src.infrastructure.database.engine import create_engine, create_session_factory
 from src.infrastructure.downloader.ytdlp_downloader import YtDlpDownloader
 from src.infrastructure.health import ConnectivityHealthCheck
+from src.infrastructure.observability.sentry import init_sentry
 from src.infrastructure.preview_context.redis_preview_context_store import (
     RedisPreviewContextStore,
 )
@@ -57,9 +58,17 @@ _MENU_COMMANDS: tuple[tuple[str, str], ...] = (
 
 async def main() -> None:
     settings: Settings = get_settings()
-    configure_logging(log_level=settings.log_level, environment=settings.environment)
+    configure_logging(
+        log_level=settings.log_level,
+        environment=settings.environment,
+        service="bot",
+        log_dir=settings.log_dir,
+        log_file_max_bytes=settings.log_file_max_bytes,
+        log_file_backups=settings.log_file_backups,
+    )
     logger = get_logger(__name__)
-    logger.info("starting_bot", environment=settings.environment)
+    sentry_enabled = init_sentry(settings, service="bot")
+    logger.info("starting_bot", environment=settings.environment, sentry=sentry_enabled)
 
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Persistent logs: with `LOG_DIR` set, every record is also written as JSON lines to `<LOG_DIR>/<service>.log` (`bot.log`, `worker.log`), rotated by size (`LOG_FILE_MAX_MB` 50 × `LOG_FILE_BACKUPS` 10). Compose mounts the named volume `app_logs` at `/var/log/umd`, which survives `down` / `up -d`. See `docs/adr/0006-persistent-logs-and-sentry.md`.
+- Opt-in Sentry (`SENTRY_DSN`, `sentry-sdk`): ERROR logs and unhandled job/handler exceptions become events tagged with `request_id`, `error_key`, `extractor_key`, `job` and `service`; no frame locals, no tracing.
+- `bind_log_context` / `clear_log_context`: domain context (request id, extractor, job) on every log line and Sentry event of the current task.
 - Disk guard: `DOWNLOAD_MIN_FREE_DISK_MB` (default 3072, `0` disables). A download is refused before it starts when free space is below it (`InsufficientStorageError`, `error-storage-full`); the storage cron logs `storage_low_disk_space`. See `docs/adr/0005-disk-guard.md`.
 - Stale-request reaper: an arq cron (every 5 min) fails `pending`/`processing` requests untouched for `job_timeout` + `STALE_REQUEST_GRACE_SECONDS` (default 300 → 40 min) and tells the user (`error-request-stale`). Migration `0006_updated_at` adds `download_requests.updated_at` with a partial index on active rows. See `docs/adr/0004-stale-request-reaper.md`.
 - `PREVIEW_TIMEOUT_SECONDS` (default 60): overall limit for one preview extraction. On expiry the extraction is killed and the user gets `error-preview-timeout` (`PreviewTimeoutError`). See `docs/adr/0003-preview-timeout-process-isolation.md`.
@@ -18,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- structlog renders through stdlib `ProcessorFormatter`: third-party logs (aiogram, arq, SQLAlchemy) share the format, timestamps and bound context of our own.
 - A request's temp directory is removed when its job ends (delivered, failed or refused) instead of waiting for the cron. The cron now sweeps only crash leftovers, by the newest mtime anywhere inside an entry, with the reaper's threshold (40 min) instead of a fixed 1 h on the directory's own mtime.
 - The worker commits each status transition on its own (one transaction per repository call) instead of holding one transaction for the whole download; `processing` is now visible while the job runs. A job starts by claiming its request (`claim_for_processing`) and skips one that is no longer active.
 - `get_preview` runs yt-dlp in a forkserver child process instead of the default thread pool; only the preview facts come back. `YtDlpDownloader` takes `preview_timeout_seconds`.
