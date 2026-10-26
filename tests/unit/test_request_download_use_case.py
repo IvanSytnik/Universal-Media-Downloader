@@ -45,6 +45,7 @@ class FakeUserRepository:
 class FakeDownloadRequestRepository:
     def __init__(self) -> None:
         self.created: list[DownloadRequest] = []
+        self.failed_ids: list[UUID] = []
 
     async def get_by_id(self, request_id: UUID) -> DownloadRequest | None:
         return next((r for r in self.created if r.id == request_id), None)
@@ -55,6 +56,9 @@ class FakeDownloadRequestRepository:
 
     async def update(self, download_request: DownloadRequest) -> None:
         pass
+
+    async def mark_failed_by_id(self, request_id: UUID) -> None:
+        self.failed_ids.append(request_id)
 
     async def list_by_user(self, user_id: UUID, limit: int = 20) -> list[DownloadRequest]:
         return [r for r in self.created if r.user_id == user_id]
@@ -204,3 +208,106 @@ async def test_kill_switch_is_scoped_to_kind_and_extractor(
 
     assert request.spec == spec
     assert len(request_repo.created) == 1
+
+
+# --- commit before enqueue -----------------------------------------------------
+
+
+class _OrderRecorder:
+    """Shared log of what happened, in order, across the fakes."""
+
+    def __init__(self) -> None:
+        self.events: list[str] = []
+
+
+class _RecordingRequestRepository(FakeDownloadRequestRepository):
+    def __init__(self, recorder: _OrderRecorder) -> None:
+        super().__init__()
+        self._recorder = recorder
+
+    async def create(self, download_request: DownloadRequest) -> DownloadRequest:
+        self._recorder.events.append("create")
+        return await super().create(download_request)
+
+    async def mark_failed_by_id(self, request_id: UUID) -> None:
+        self._recorder.events.append("mark_failed")
+        await super().mark_failed_by_id(request_id)
+
+
+class _RecordingQueue(FakeTaskQueue):
+    def __init__(self, recorder: _OrderRecorder, error: Exception | None = None) -> None:
+        super().__init__()
+        self._recorder = recorder
+        self._error = error
+
+    async def enqueue_download(self, request_id: UUID, chat_id: int, message_id: int) -> str:
+        self._recorder.events.append("enqueue")
+        if self._error is not None:
+            raise self._error
+        return await super().enqueue_download(request_id, chat_id, message_id)
+
+
+async def _execute(repo: FakeDownloadRequestRepository, queue: FakeTaskQueue) -> DownloadRequest:
+    user = User.create_from_telegram(telegram_id=42)
+    use_case = RequestDownloadUseCase(FakeUserRepository(user), repo, queue, FormatPolicy({}))
+    return await use_case.execute(
+        telegram_id=42,
+        url="https://example.com/video",
+        spec=DEFAULT_DOWNLOAD_SPEC,
+        extractor_key="youtube",
+        chat_id=1,
+        message_id=2,
+    )
+
+
+@pytest.mark.asyncio
+async def test_request_is_persisted_before_its_job_is_enqueued() -> None:
+    recorder = _OrderRecorder()
+    repo = _RecordingRequestRepository(recorder)
+
+    await _execute(repo, _RecordingQueue(recorder))
+
+    assert recorder.events == ["create", "enqueue"]
+    assert repo.failed_ids == []
+
+
+@pytest.mark.asyncio
+async def test_failed_enqueue_marks_the_request_failed_and_reraises() -> None:
+    recorder = _OrderRecorder()
+    repo = _RecordingRequestRepository(recorder)
+    queue = _RecordingQueue(recorder, error=ConnectionError("Redis is down"))
+
+    with structlog.testing.capture_logs() as logs, pytest.raises(ConnectionError):
+        await _execute(repo, queue)
+
+    [created] = repo.created
+    assert recorder.events == ["create", "enqueue", "mark_failed"]
+    assert repo.failed_ids == [created.id]
+    entry = next(e for e in logs if e["event"] == "request_download_enqueue_failed")
+    assert entry["log_level"] == "error"
+    assert entry["request_id"] == str(created.id)
+    assert "ConnectionError: Redis is down" in entry["error"]
+
+
+@pytest.mark.asyncio
+async def test_refused_request_never_reaches_storage_or_queue() -> None:
+    recorder = _OrderRecorder()
+    user = User.create_from_telegram(telegram_id=42)
+    use_case = RequestDownloadUseCase(
+        FakeUserRepository(user),
+        _RecordingRequestRepository(recorder),
+        _RecordingQueue(recorder),
+        FormatPolicy({"youtube": [FormatKind.AUDIO]}),
+    )
+
+    with pytest.raises(FormatNotAllowedError):
+        await use_case.execute(
+            telegram_id=42,
+            url="https://example.com/video",
+            spec=AudioSpec(),
+            extractor_key="youtube",
+            chat_id=1,
+            message_id=2,
+        )
+
+    assert recorder.events == []

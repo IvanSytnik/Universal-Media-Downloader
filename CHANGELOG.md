@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A fast worker could start a download job before the bot had committed its request row: the job found nothing (`process_download_request_not_found`) and the request stayed `pending` until the reaper. `request_download` now commits the row before enqueueing. A failed enqueue marks the request `failed` at once (`request_download_enqueue_failed`) instead of rolling it back silently.
 - Delivered files stayed on disk for up to an hour after delivery, and a failed removal was counted as removed (`rmtree(ignore_errors=True)`).
 - A request whose job died (worker crash, arq `job_timeout`, lost queue message) stayed `pending`/`processing` forever and its user never heard back.
 - A stalled preview extraction (slow source, unanswered DNS) held an executor thread indefinitely; enough of them stopped the bot from answering any link, `/download` included.

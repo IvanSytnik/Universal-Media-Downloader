@@ -23,8 +23,9 @@ from src.application.use_cases.trigger_ping_job import TriggerPingJobUseCase
 from src.domain.interfaces.downloader import DownloaderPort
 from src.domain.interfaces.task_queue import TaskQueue
 from src.infrastructure.database.engine import session_scope
-from src.infrastructure.database.repositories.download_request_repository import (
-    SqlAlchemyDownloadRequestRepository,
+from src.infrastructure.database.repositories.transactional import (
+    TransactionalDownloadRequestRepository,
+    TransactionalUserRepository,
 )
 from src.infrastructure.database.repositories.user_repository import SqlAlchemyUserRepository
 from src.presentation.telegram.dependencies import UseCaseProvider
@@ -54,13 +55,22 @@ class SqlAlchemyUseCaseProvider(UseCaseProvider):
 
     @asynccontextmanager
     async def request_download(self) -> AsyncIterator[RequestDownloadUseCase]:
-        async with session_scope(self._session_factory) as session:
-            yield RequestDownloadUseCase(
-                user_repository=SqlAlchemyUserRepository(session),
-                download_request_repository=SqlAlchemyDownloadRequestRepository(session),
-                task_queue=self._task_queue,
-                format_policy=self._format_policy,
-            )
+        """NOT one transaction, unlike the others: each repository call
+        commits on its own, so the request row is committed BEFORE the
+        use case enqueues its job. Inside one ``session_scope`` the
+        commit came after the enqueue, and a worker picking the job up
+        in between found no row (``process_download_request_not_found``)
+        while the row stayed PENDING. The writes are a user insert and a
+        request insert, with nothing to make atomic together.
+        """
+        yield RequestDownloadUseCase(
+            user_repository=TransactionalUserRepository(self._session_factory),
+            download_request_repository=TransactionalDownloadRequestRepository(
+                self._session_factory
+            ),
+            task_queue=self._task_queue,
+            format_policy=self._format_policy,
+        )
 
     @asynccontextmanager
     async def set_user_language(self) -> AsyncIterator[SetUserLanguageUseCase]:

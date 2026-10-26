@@ -26,6 +26,18 @@ default on purpose: unlike the spec (which has a sane default), there's
 no sane default "where to render progress" — a caller
 that hasn't thought about it should fail loudly at the call site, not
 silently enqueue a download nobody can see progress for.
+
+Commit before enqueue. The request must be durable before its job
+exists: a worker can start the job the instant it is enqueued, and
+before this was fixed it sometimes found no row (the bot committed only
+after ``execute`` returned). The repositories this use case is built
+with commit per call (see ``SqlAlchemyUseCaseProvider.request_download``),
+so ``create`` has committed by the time ``enqueue_download`` runs.
+
+The flip side: a failed enqueue no longer rolls the row back. It is
+marked FAILED right away and the error re-raised. Left PENDING, it would
+sit until the stale-request reaper "rescued" it 40 minutes later, with
+a message about a request the user was already told had failed.
 """
 
 from __future__ import annotations
@@ -39,7 +51,9 @@ from src.domain.interfaces.task_queue import TaskQueue
 from src.domain.interfaces.user_repository import UserRepository
 from src.domain.value_objects.download_spec import DownloadSpec
 from src.domain.value_objects.url_validation import validate_url
-from src.shared.logging import bind_log_context
+from src.shared.logging import bind_log_context, get_logger
+
+logger = get_logger(__name__)
 
 
 class RequestDownloadUseCase:
@@ -86,6 +100,15 @@ class RequestDownloadUseCase:
         # both (ADR 0006).
         bind_log_context(request_id=str(request.id), extractor_key=extractor_key)
         await self._download_request_repository.create(request)
-        await self._task_queue.enqueue_download(request.id, chat_id, message_id)
+        try:
+            await self._task_queue.enqueue_download(request.id, chat_id, message_id)
+        except Exception as exc:
+            logger.error(
+                "request_download_enqueue_failed",
+                request_id=str(request.id),
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            await self._download_request_repository.mark_failed_by_id(request.id)
+            raise
 
         return request

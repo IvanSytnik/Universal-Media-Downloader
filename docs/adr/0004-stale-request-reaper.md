@@ -82,9 +82,9 @@ Two facts about the code at the time shaped the design:
 ## Not done
 
 - Committing the bot's request row *before* enqueueing (the race in
-  Context). The reaper now bounds its damage to 40 minutes. The fix
-  itself is a separate change to `RequestDownloadUseCase`'s unit of
-  work.
+  Context) was left out of this change. *Fixed since:*
+  `SqlAlchemyUseCaseProvider.request_download` commits per call, and a
+  failed enqueue marks the request failed.
 - Clock: `updated_at` and the cutoff come from the worker/bot hosts'
   clocks (one host today). On several hosts, use the database's `now()`
   on both sides.

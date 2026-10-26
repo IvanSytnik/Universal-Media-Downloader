@@ -11,7 +11,11 @@ nothing from ``src.infrastructure``.
 Use cases that touch the database are handed out as async context
 managers: one ``async with`` is one unit of work (commit on success,
 rollback on exception), exactly the transaction boundary the handlers had
-when they opened sessions themselves.
+when they opened sessions themselves. One exception: ``request_download``
+commits each write as it happens, because its job must not be enqueued
+before the request row is committed (see
+``SqlAlchemyUseCaseProvider.request_download``). Code after ``execute``
+inside its ``async with`` cannot undo the request.
 """
 
 from __future__ import annotations
