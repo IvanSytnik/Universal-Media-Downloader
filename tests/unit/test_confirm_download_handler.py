@@ -27,11 +27,13 @@ from tests.conftest import FakeI18n
 from tests.unit.handler_fakes import (
     AllowAll,
     Callback,
+    DownQueue,
     Provider,
     RecordingStore,
     make_message,
     settings,
 )
+from tests.unit.test_request_download_use_case import FakeDownloadRequestRepository
 
 TOKEN = "c" * 32
 _CTX = PreviewContext(
@@ -131,3 +133,40 @@ async def test_video_still_allowed_when_only_audio_is_disabled(i18n: Any) -> Non
     await _tap(f"dl:{TOKEN}:v720", store, provider, i18n)
 
     assert [r.spec for r in provider.created] == [VideoSpec(VideoTier.P720)]
+
+
+async def test_unreachable_queue_turns_the_card_into_a_failure_record(i18n: Any) -> None:
+    store = RecordingStore({TOKEN: _CTX})
+    provider = Provider(FormatPolicy({}), queue=DownQueue())
+
+    callback, message = await _tap(f"dl:{TOKEN}:v1080", store, provider, i18n)
+
+    expected_suffix = i18n.get("flow-download-failed", error=i18n.get("error-internal"))
+    assert message.edits == ["preview text" + expected_suffix]
+    assert "redis" not in message.edits[0].lower()
+    # The spinner is closed, without a second copy of the error in an alert.
+    assert callback.answers == [(None, False)]
+    [request] = provider.created
+    assert provider.requests.failed_ids == [request.id]
+    # The token stays spent: a second tap can't enqueue a duplicate.
+    assert await store.pop(TOKEN) is None
+
+
+async def test_failure_before_the_enqueue_is_not_dressed_up_as_error_internal(
+    i18n: Any,
+) -> None:
+    """Only ``DownloadEnqueueError`` is handled. A database failure while
+    saving the request still propagates — to aiogram's error log and
+    Sentry — instead of being swallowed by the handler."""
+
+    class _BrokenRepository(FakeDownloadRequestRepository):
+        async def create(self, download_request: Any) -> Any:
+            raise RuntimeError("database is gone")
+
+    provider = Provider(FormatPolicy({}))
+    provider.requests = _BrokenRepository()
+
+    with pytest.raises(RuntimeError, match="database is gone"):
+        await _tap(f"dl:{TOKEN}:v1080", RecordingStore({TOKEN: _CTX}), provider, i18n)
+
+    assert provider.queue.enqueued_download_ids == []

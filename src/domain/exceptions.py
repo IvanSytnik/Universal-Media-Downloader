@@ -159,6 +159,16 @@ class FormatNotAllowedError(DownloaderError):
     error_key = "error-format-not-allowed"
 
 
+class DownloadEnqueueError(DownloaderError):
+    """The request was saved but its job could not be put on the queue
+    (Redis down, arq refusing the job). The request is already marked
+    failed when this is raised; the cause is chained (``__cause__``) for
+    the log. A failure on our side, so the user gets the generic
+    "something broke" message — nothing about the link was wrong."""
+
+    error_key = "error-internal"
+
+
 class InsufficientStorageError(DownloaderError):
     """Free disk space for downloads is below the configured floor, so
     the download was refused before it started (disk guard, ADR 0005).

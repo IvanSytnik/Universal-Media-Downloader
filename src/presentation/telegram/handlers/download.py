@@ -35,7 +35,12 @@ from aiogram_i18n import I18nContext
 
 from src.application.policies.format_policy import FormatPolicy
 from src.config.settings import Settings
-from src.domain.exceptions import ExtractionError, FormatNotAllowedError, UnsupportedURLError
+from src.domain.exceptions import (
+    DownloadEnqueueError,
+    ExtractionError,
+    FormatNotAllowedError,
+    UnsupportedURLError,
+)
 from src.domain.interfaces.rate_limiter import RateLimiterPort
 from src.domain.value_objects.url_validation import validate_url_against_allowlist
 from src.presentation.telegram.dependencies import UseCaseProvider
@@ -108,6 +113,11 @@ async def handle_download(
             await status_message.edit_text(i18n.get("error-bad-url", reason=html_escape(str(exc))))
             return
         except FormatNotAllowedError as exc:
+            await status_message.edit_text(format_download_error(i18n, exc))
+            return
+        except DownloadEnqueueError as exc:
+            # The status message said "started"; it must not keep saying
+            # so. The request is already failed and logged by the use case.
             await status_message.edit_text(format_download_error(i18n, exc))
             return
 

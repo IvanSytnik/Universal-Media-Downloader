@@ -65,7 +65,12 @@ from aiogram_i18n import I18nContext
 
 from src.application.policies.format_policy import FormatPolicy, OfferedChoices
 from src.config.settings import Settings
-from src.domain.exceptions import ExtractionError, FormatNotAllowedError, UnsupportedURLError
+from src.domain.exceptions import (
+    DownloadEnqueueError,
+    ExtractionError,
+    FormatNotAllowedError,
+    UnsupportedURLError,
+)
 from src.domain.interfaces.preview_context_store import PreviewContextStorePort
 from src.domain.interfaces.rate_limiter import RateLimiterPort
 from src.domain.value_objects.preview_context import PreviewContext
@@ -414,6 +419,18 @@ async def handle_confirm_download(
         except UnsupportedURLError as exc:
             # Our validator again (RequestDownloadUseCase re-validates).
             await callback.answer(i18n.get("error-bad-url", reason=str(exc)[:150]), show_alert=True)
+            return
+        except DownloadEnqueueError as exc:
+            # The card becomes the failure record: the token is spent, so
+            # the buttons go (edit_text drops the keyboard) and the reason
+            # stays visible under the preview. The request is already
+            # failed and logged by the use case.
+            current_text = callback.message.text or ""
+            await callback.message.edit_text(
+                html_escape(current_text)
+                + i18n.get("flow-download-failed", error=format_download_error(i18n, exc))
+            )
+            await callback.answer()
             return
 
     logger.info(

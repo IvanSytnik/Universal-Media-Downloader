@@ -35,7 +35,8 @@ with commit per call (see ``SqlAlchemyUseCaseProvider.request_download``),
 so ``create`` has committed by the time ``enqueue_download`` runs.
 
 The flip side: a failed enqueue no longer rolls the row back. It is
-marked FAILED right away and the error re-raised. Left PENDING, it would
+marked FAILED right away and ``DownloadEnqueueError`` raised (the queue's
+own exception chained), which the handlers turn into ``error-internal``. Left PENDING, it would
 sit until the stale-request reaper "rescued" it 40 minutes later, with
 a message about a request the user was already told had failed.
 """
@@ -45,7 +46,7 @@ from __future__ import annotations
 from src.application.policies.format_policy import FormatPolicy
 from src.domain.entities.download_request import DownloadRequest
 from src.domain.entities.user import User
-from src.domain.exceptions import FormatNotAllowedError
+from src.domain.exceptions import DownloadEnqueueError, FormatNotAllowedError
 from src.domain.interfaces.download_request_repository import DownloadRequestRepository
 from src.domain.interfaces.task_queue import TaskQueue
 from src.domain.interfaces.user_repository import UserRepository
@@ -109,6 +110,6 @@ class RequestDownloadUseCase:
                 error=f"{type(exc).__name__}: {exc}",
             )
             await self._download_request_repository.mark_failed_by_id(request.id)
-            raise
+            raise DownloadEnqueueError from exc
 
         return request

@@ -11,7 +11,11 @@ from src.application.policies.format_policy import FormatPolicy
 from src.application.use_cases.request_download import RequestDownloadUseCase
 from src.domain.entities.download_request import DownloadRequest
 from src.domain.entities.user import User
-from src.domain.exceptions import FormatNotAllowedError, UnsupportedURLError
+from src.domain.exceptions import (
+    DownloadEnqueueError,
+    FormatNotAllowedError,
+    UnsupportedURLError,
+)
 from src.domain.value_objects.download_spec import (
     DEFAULT_DOWNLOAD_SPEC,
     AudioSpec,
@@ -277,9 +281,12 @@ async def test_failed_enqueue_marks_the_request_failed_and_reraises() -> None:
     repo = _RecordingRequestRepository(recorder)
     queue = _RecordingQueue(recorder, error=ConnectionError("Redis is down"))
 
-    with structlog.testing.capture_logs() as logs, pytest.raises(ConnectionError):
+    with structlog.testing.capture_logs() as logs, pytest.raises(DownloadEnqueueError) as caught:
         await _execute(repo, queue)
 
+    # A domain error the handlers can catch narrowly; the cause rides along.
+    assert caught.value.error_key == "error-internal"
+    assert isinstance(caught.value.__cause__, ConnectionError)
     [created] = repo.created
     assert recorder.events == ["create", "enqueue", "mark_failed"]
     assert repo.failed_ids == [created.id]

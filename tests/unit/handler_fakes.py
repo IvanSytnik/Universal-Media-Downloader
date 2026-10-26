@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
+from uuid import UUID
 
 from aiogram.types import Chat, Message
 
@@ -99,9 +100,14 @@ class _PreviewUseCase:
 class Provider:
     """UseCaseProvider over the real RequestDownloadUseCase."""
 
-    def __init__(self, policy: FormatPolicy, preview_result: MediaPreview | None = None) -> None:
+    def __init__(
+        self,
+        policy: FormatPolicy,
+        preview_result: MediaPreview | None = None,
+        queue: FakeTaskQueue | None = None,
+    ) -> None:
         self.requests = FakeDownloadRequestRepository()
-        self.queue = FakeTaskQueue()
+        self.queue = queue or FakeTaskQueue()
         self._users = FakeUserRepository()
         self._policy = policy
         self.preview_use_case = _PreviewUseCase(preview_result or preview("youtube", 1080))
@@ -116,6 +122,13 @@ class Provider:
 
     def preview_download(self) -> _PreviewUseCase:
         return self.preview_use_case
+
+
+class DownQueue(FakeTaskQueue):
+    """The queue is unreachable (Redis down)."""
+
+    async def enqueue_download(self, request_id: UUID, chat_id: int, message_id: int) -> str:
+        raise ConnectionError("Error 111 connecting to redis:6379. Connection refused.")
 
 
 class TextMessage(Message):

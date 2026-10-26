@@ -80,6 +80,10 @@ preview-duration-unknown = неизвестно
 flow-download-started =
 
     ⏳ Скачивание начато — пришлю файл сюда же, когда будет готово.
+# $error — a localized error-* message (Fluent strings, never raw exception text).
+flow-download-failed =
+
+    ❌ { $error }
 flow-cancelled =
 
     ❌ Отменено.

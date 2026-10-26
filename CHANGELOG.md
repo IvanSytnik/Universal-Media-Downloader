@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- When the job could not be enqueued, `/download` left the status message saying "started" and the guided flow left the card's buttons up with a spinner; the user heard nothing. Both now show `error-internal` (the guided card gets a `flow-download-failed` line and loses its buttons). The use case raises `DownloadEnqueueError` for this, so other failures still propagate to the error log and Sentry.
 - A fast worker could start a download job before the bot had committed its request row: the job found nothing (`process_download_request_not_found`) and the request stayed `pending` until the reaper. `request_download` now commits the row before enqueueing. A failed enqueue marks the request `failed` at once (`request_download_enqueue_failed`) instead of rolling it back silently.
 - Delivered files stayed on disk for up to an hour after delivery, and a failed removal was counted as removed (`rmtree(ignore_errors=True)`).
 - A request whose job died (worker crash, arq `job_timeout`, lost queue message) stayed `pending`/`processing` forever and its user never heard back.

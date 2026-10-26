@@ -26,6 +26,7 @@ from src.application.use_cases.preview_download import PreviewDownloadUseCase
 from src.application.use_cases.trigger_ping_job import TriggerPingJobUseCase
 from src.composition import SqlAlchemyUseCaseProvider
 from src.domain.entities.download_request import DownloadRequest
+from src.domain.exceptions import DownloadEnqueueError
 from src.domain.value_objects.download_spec import AudioSpec
 from src.domain.value_objects.enums import DownloadStatus
 from src.infrastructure.database.engine import Base
@@ -214,7 +215,7 @@ async def test_failed_enqueue_leaves_a_failed_request_not_an_orphan(
 ) -> None:
     queue = _WorkerEyedQueue(file_session_factory, fail=True)
 
-    with pytest.raises(ConnectionError):
+    with pytest.raises(DownloadEnqueueError):
         await _request(_provider(file_session_factory, queue), 500)
 
     [seen] = queue.seen_at_enqueue

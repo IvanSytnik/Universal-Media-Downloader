@@ -19,6 +19,7 @@ from src.presentation.telegram.i18n import DEFAULT_LOCALE, create_i18n_core
 from tests.conftest import FakeI18n
 from tests.unit.handler_fakes import (
     AllowAll,
+    DownQueue,
     Provider,
     RecordingStore,
     make_message,
@@ -133,3 +134,18 @@ async def test_youtube_music_is_refused_before_the_preview(i18n: Any) -> None:
     assert provider.created == []
     (reply,) = message.sent
     assert reply.text is not None and reply.text.startswith(i18n.get("error-bad-url", reason=""))
+
+
+async def test_unreachable_queue_turns_the_status_message_into_an_error(i18n: Any) -> None:
+    policy = FormatPolicy({})
+    provider = Provider(policy, preview("youtube", 1080), queue=DownQueue())
+
+    message = await _run(f"/download {URL}", provider, policy, i18n)
+
+    (status,) = message.sent
+    assert status.text == i18n.get("download-started")
+    # No longer claims the download started; no raw Redis text either.
+    assert status.edits == [i18n.get("error-internal")]
+    assert "redis" not in status.edits[0].lower()
+    [request] = provider.created
+    assert provider.requests.failed_ids == [request.id]
