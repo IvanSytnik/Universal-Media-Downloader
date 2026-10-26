@@ -19,7 +19,9 @@ from src.application.use_cases.process_download import ProcessDownloadUseCase
 from src.domain.entities.download_request import DownloadRequest
 from src.domain.entities.user import User
 from src.domain.exceptions import ExtractionError, NotifierError
+from src.domain.value_objects.deliverable_media import DeliverableMedia
 from src.domain.value_objects.download_options import DownloadOptions
+from src.domain.value_objects.download_result import DownloadResult
 from src.domain.value_objects.enums import DownloadStatus
 from tests.conftest import FakeErrorLocalizer
 
@@ -75,18 +77,28 @@ class FakeUserRepository:
 
 
 class FakeDownloader:
-    def __init__(self, result_path: Path | None = None, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        result_path: Path | None = None,
+        error: Exception | None = None,
+        result: DownloadResult | None = None,
+    ) -> None:
         self._result_path = result_path
         self._error = error
+        self._result = result
 
     async def get_preview(self, url: str):  # noqa: ANN201 — not exercised in these tests
         raise NotImplementedError
 
-    async def download(self, url: str, options: DownloadOptions, progress_callback=None) -> Path:
+    async def download(
+        self, url: str, options: DownloadOptions, progress_callback=None
+    ) -> DownloadResult:
         if self._error is not None:
             raise self._error
+        if self._result is not None:
+            return self._result
         assert self._result_path is not None
-        return self._result_path
+        return DownloadResult(self._result_path)
 
 
 class FakeStorage:
@@ -101,14 +113,16 @@ class FakeNotifier:
     def __init__(self, fail_send_file: bool = False) -> None:
         self.fail_send_file = fail_send_file
         self.sent_files: list[tuple[int, Path]] = []
+        self.sent_media: list[DeliverableMedia] = []
         self.sent_texts: list[tuple[int, str]] = []
 
     async def send_file(
-        self, telegram_id: int, file_path: Path, caption: str | None = None
+        self, telegram_id: int, media: DeliverableMedia, caption: str | None = None
     ) -> None:
         if self.fail_send_file:
             raise NotifierError("file too large")
-        self.sent_files.append((telegram_id, file_path))
+        self.sent_files.append((telegram_id, media.path))
+        self.sent_media.append(media)
 
     async def send_text(self, telegram_id: int, text: str) -> None:
         self.sent_texts.append((telegram_id, text))

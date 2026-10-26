@@ -63,8 +63,10 @@ from src.domain.interfaces.notifier import NotifierPort
 from src.domain.interfaces.progress_publisher import ProgressPublisherPort
 from src.domain.interfaces.storage import StoragePort
 from src.domain.interfaces.user_repository import UserRepository
+from src.domain.value_objects.deliverable_media import DeliverableMedia
 from src.domain.value_objects.download_options import DownloadOptions
 from src.domain.value_objects.download_progress import DownloadProgress
+from src.domain.value_objects.download_spec import spec_kind
 from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -201,7 +203,7 @@ class ProcessDownloadUseCase:
             )
 
         try:
-            file_path = await self._downloader.download(
+            result = await self._downloader.download(
                 request.source_url, options, progress_callback=_on_progress
             )
         except (ExtractionError, UnsupportedURLError) as exc:
@@ -219,7 +221,10 @@ class ProcessDownloadUseCase:
             return
 
         try:
-            await self._notifier.send_file(user.telegram_id, file_path)
+            # Day 11D-1: the notifier picks video / audio / document from
+            # this; `kind` is what was asked for, the facts what the file is.
+            media = DeliverableMedia.from_result(result, spec_kind(request.spec))
+            await self._notifier.send_file(user.telegram_id, media)
         except NotifierError as exc:
             logger.warning(
                 "process_download_delivery_failed", request_id=str(request_id), error=str(exc)

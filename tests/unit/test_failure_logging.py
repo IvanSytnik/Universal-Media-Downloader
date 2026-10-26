@@ -38,7 +38,9 @@ from src.domain.exceptions import (
     FileTooLargeError,
     PrivateContentError,
 )
+from src.domain.value_objects.deliverable_media import DeliverableMedia
 from src.domain.value_objects.download_options import DownloadOptions
+from src.domain.value_objects.download_result import DownloadResult
 from src.infrastructure.downloader import ytdlp_downloader
 from src.infrastructure.downloader.ytdlp_downloader import YtDlpDownloader
 
@@ -78,7 +80,9 @@ class _FailingDownloader:
     def __init__(self, exc: Exception) -> None:
         self._exc = exc
 
-    async def download(self, url: str, options: Any, progress_callback: Any = None) -> Path:
+    async def download(
+        self, url: str, options: Any, progress_callback: Any = None
+    ) -> DownloadResult:
         raise self._exc
 
     async def get_preview(self, url: str) -> Any:  # pragma: no cover
@@ -97,7 +101,9 @@ class _Notifier:
     def __init__(self) -> None:
         self.texts: list[str] = []
 
-    async def send_file(self, telegram_id: int, file_path: Path, caption: Any = None) -> None:
+    async def send_file(
+        self, telegram_id: int, media: DeliverableMedia, caption: Any = None
+    ) -> None:
         raise AssertionError("not reached")  # pragma: no cover
 
     async def send_text(self, telegram_id: int, text: str) -> None:
@@ -284,7 +290,11 @@ async def test_success_is_logged_with_the_resulting_path(
     # The one happy-path line worth pinning: it's what tells you WHICH
     # file a delivery failure was about.
     produced = str(tmp_path / "v.mp4")
-    monkeypatch.setattr(ytdlp_downloader, "_run_download_in_process", lambda *a, **kw: produced)
+    monkeypatch.setattr(
+        ytdlp_downloader,
+        "_run_download_in_process",
+        lambda *a, **kw: DownloadResult(Path(produced)),
+    )
 
     with structlog.testing.capture_logs() as logs:
         await YtDlpDownloader().download(

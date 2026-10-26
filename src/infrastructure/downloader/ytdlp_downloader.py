@@ -119,15 +119,25 @@ are computed from exactly the formats the download will prefer (TikTok:
 
 The spec crosses the spawn boundary as two primitives (kind value, tier
 value or None) and is rebuilt in the child with ``spec_from_parts``.
+
+**Day 11D-1 — media facts.** The delivery needs width, height and
+duration to send a playable video (Telegram's guess from a bare document
+is unpredictable). The child reads them from yt-dlp's FINAL info — after
+the merge/transcode, so for ``bv*+ba`` they describe the merged file —
+and runs ``ffprobe`` on the file only when info lacks one of them. They
+travel back on the result queue as a JSON payload and come out of
+``download()`` as a ``DownloadResult``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import multiprocessing
 import os
 import queue
+import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -143,6 +153,7 @@ from src.domain.exceptions import (
 from src.domain.interfaces.downloader import ProgressCallback
 from src.domain.value_objects.download_options import DownloadOptions
 from src.domain.value_objects.download_progress import DownloadProgress
+from src.domain.value_objects.download_result import DownloadResult
 from src.domain.value_objects.download_spec import (
     AudioSpec,
     DownloadSpec,
@@ -506,7 +517,7 @@ def _download_worker_entrypoint(
                     info=info,
                 )
             )
-        result_queue.put(("ok", filename))
+        result_queue.put(("ok", json.dumps(_media_facts(info, filename, format_kind))))
     except _FileTooLargeError as exc:
         # Encode the two integers into the string payload (the queue's
         # value type is a plain string) as "estimated:limit"; the parent
@@ -522,6 +533,89 @@ def _download_worker_entrypoint(
         result_queue.put(("extract_error", str(exc)))
     except Exception as exc:  # noqa: BLE001 — must report every failure to the parent, never die silently
         result_queue.put(("error", str(exc)))
+
+
+def _media_facts(
+    info: dict[str, Any] | None, filename: str, format_kind: FormatKind
+) -> dict[str, Any]:
+    """The facts the delivery needs, from the final info dict; ffprobe on
+    the file fills only what info lacks. Runs in the child."""
+    info = info or {}
+    is_video = format_kind is FormatKind.VIDEO
+    width = _positive_int(info.get("width")) if is_video else None
+    height = _positive_int(info.get("height")) if is_video else None
+    duration = _positive_int(info.get("duration"))
+    if duration is None or (is_video and (width is None or height is None)):
+        probed = _ffprobe_facts(filename)
+        duration = duration or probed.get("duration")
+        if is_video:
+            width = width or probed.get("width")
+            height = height or probed.get("height")
+    return {
+        "path": filename,
+        "width": width,
+        "height": height,
+        "duration_seconds": duration,
+        "title": info.get("title") or None,
+        "uploader": info.get("artist") or info.get("uploader") or info.get("channel") or None,
+    }
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+        return None
+    return round(value)
+
+
+def _ffprobe_facts(filename: str) -> dict[str, int]:
+    """Fallback only. Any failure (no ffprobe, unreadable file, timeout)
+    yields no facts — the delivery then degrades to a document, which is
+    still a delivery."""
+    try:
+        out = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_type,width,height:format=duration",
+                "-of",
+                "json",
+                filename,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        ).stdout
+        probe = json.loads(out)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return {}
+    facts: dict[str, int] = {}
+    streams: list[dict[str, Any]] = probe.get("streams", [])
+    video = next((st for st in streams if st.get("codec_type") == "video"), {})
+    for key in ("width", "height"):
+        if (number := _positive_int(video.get(key))) is not None:
+            facts[key] = number
+    try:
+        duration = float(probe.get("format", {}).get("duration"))
+    except (TypeError, ValueError):
+        duration = 0.0
+    if (seconds := _positive_int(duration)) is not None:
+        facts["duration"] = seconds
+    return facts
+
+
+def _parse_result(payload: str) -> DownloadResult:
+    facts = json.loads(payload)
+    return DownloadResult(
+        path=Path(facts["path"]),
+        width=facts.get("width"),
+        height=facts.get("height"),
+        duration_seconds=facts.get("duration_seconds"),
+        title=facts.get("title"),
+        uploader=facts.get("uploader"),
+    )
 
 
 def _build_missing_file_diagnostic(
@@ -690,7 +784,7 @@ class RunDownloadInProcess(Protocol):
         video_tier_value: str | None,
         progress_sink: Callable[[dict[str, Any] | None], None] | None = None,
         /,
-    ) -> str: ...
+    ) -> DownloadResult: ...
 
 
 def _run_download_in_process(
@@ -701,7 +795,7 @@ def _run_download_in_process(
     format_kind_value: str,
     video_tier_value: str | None,
     progress_sink: Callable[[dict[str, Any] | None], None] | None = None,
-) -> str:
+) -> DownloadResult:
     """Blocking. Must only be called via loop.run_in_executor() — never
     directly on the event loop thread. The blocking work here
     (`_wait_and_drain_progress`) is cheap waiting/polling, not CPU work;
@@ -751,7 +845,7 @@ def _run_download_in_process(
         raise _DownloadExtractError(payload)
     if status == "error":
         raise _DownloadProcessError(payload)
-    return payload
+    return _parse_result(payload)
 
 
 # The real runner must satisfy its own protocol (checked by mypy on src).
@@ -824,7 +918,7 @@ class YtDlpDownloader:
         url: str,
         options: DownloadOptions,
         progress_callback: ProgressCallback | None = None,
-    ) -> Path:
+    ) -> DownloadResult:
         loop = asyncio.get_running_loop()
         options.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -847,7 +941,7 @@ class YtDlpDownloader:
             drain_task = asyncio.create_task(_drain_bridge(bridge, progress_callback))
 
         try:
-            result_path_str = await loop.run_in_executor(
+            result = await loop.run_in_executor(
                 None,
                 _run_download_in_process,
                 url,
@@ -892,5 +986,12 @@ class YtDlpDownloader:
             if drain_task is not None:
                 await drain_task
 
-        logger.info("download_succeeded", url=url, path=result_path_str)
-        return Path(result_path_str)
+        logger.info(
+            "download_succeeded",
+            url=url,
+            path=str(result.path),
+            width=result.width,
+            height=result.height,
+            duration_seconds=result.duration_seconds,
+        )
+        return result

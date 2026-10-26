@@ -8,15 +8,20 @@ will need a different notifier behind the same contract).
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Protocol
+
+from src.domain.value_objects.deliverable_media import DeliverableMedia
 
 
 class NotifierPort(Protocol):
     async def send_file(
-        self, telegram_id: int, file_path: Path, caption: str | None = None
+        self, telegram_id: int, media: DeliverableMedia, caption: str | None = None
     ) -> None:
         """Delivers a completed download to the user.
+
+        Day 11D-1: takes the media, not a bare path, so the
+        implementation can deliver a playable video / audio track; it
+        falls back to a plain file when the media facts are missing.
 
         Raises:
             NotifierError: delivery failed (file too large, user blocked

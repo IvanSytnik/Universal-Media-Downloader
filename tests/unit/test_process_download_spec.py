@@ -23,7 +23,9 @@ import pytest
 from src.application.use_cases.process_download import ProcessDownloadUseCase
 from src.domain.entities.download_request import DownloadRequest
 from src.domain.entities.user import User
+from src.domain.value_objects.deliverable_media import DeliverableMedia
 from src.domain.value_objects.download_options import DownloadOptions
+from src.domain.value_objects.download_result import DownloadResult
 from src.domain.value_objects.download_spec import (
     DEFAULT_DOWNLOAD_SPEC,
     AudioSpec,
@@ -42,9 +44,9 @@ class _CapturingDownloader:
 
     async def download(
         self, url: str, options: DownloadOptions, progress_callback: object = None
-    ) -> Path:
+    ) -> DownloadResult:
         self.captured_options = options
-        return Path("/tmp/out.bin")
+        return DownloadResult(Path("/tmp/out.bin"))
 
 
 class _FakeRequestRepo:
@@ -79,7 +81,7 @@ class _Storage:
 
 class _Notifier:
     async def send_file(
-        self, telegram_id: int, file_path: Path, caption: str | None = None
+        self, telegram_id: int, media: DeliverableMedia, caption: str | None = None
     ) -> None:
         return None
 

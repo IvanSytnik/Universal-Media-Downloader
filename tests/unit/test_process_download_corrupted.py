@@ -23,6 +23,8 @@ from aiogram_i18n.cores import FluentRuntimeCore
 
 from src.application.use_cases.process_download import ProcessDownloadUseCase
 from src.domain.exceptions import CorruptedRecordError
+from src.domain.value_objects.deliverable_media import DeliverableMedia
+from src.domain.value_objects.download_result import DownloadResult
 from src.infrastructure.localization.fluent_error_localizer import FluentErrorLocalizer
 from src.presentation.telegram.i18n import DEFAULT_LOCALE, create_i18n_core
 
@@ -72,7 +74,7 @@ class _CapturingNotifier:
         self.texts: list[str] = []
 
     async def send_file(
-        self, telegram_id: int, file_path: Path, caption: str | None = None
+        self, telegram_id: int, media: DeliverableMedia, caption: str | None = None
     ) -> None:  # pragma: no cover - never reached
         raise AssertionError("should not deliver anything for a corrupted row")
 
@@ -83,7 +85,7 @@ class _CapturingNotifier:
 class _ExplodingDownloader:
     async def download(
         self, url: str, options: object, progress_callback: object = None
-    ) -> Path:  # pragma: no cover - must never be reached
+    ) -> DownloadResult:  # pragma: no cover - must never be reached
         raise AssertionError("must not start a download for an unreadable row")
 
     async def get_preview(self, url: str) -> object:  # pragma: no cover

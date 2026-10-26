@@ -14,11 +14,11 @@ posture as ``format_kind`` in Day 11A.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from pathlib import Path
 from typing import Protocol
 
 from src.domain.value_objects.download_options import DownloadOptions
 from src.domain.value_objects.download_progress import DownloadProgress
+from src.domain.value_objects.download_result import DownloadResult
 from src.domain.value_objects.media_preview import MediaPreview
 
 ProgressCallback = Callable[[DownloadProgress], Awaitable[None]]
@@ -42,10 +42,11 @@ class DownloaderPort(Protocol):
         url: str,
         options: DownloadOptions,
         progress_callback: ProgressCallback | None = None,
-    ) -> Path:
+    ) -> DownloadResult:
         """Downloads the media at `url` into `options.output_dir`.
 
-        Returns the path to the downloaded file. Implementations must
+        Returns the downloaded file with its media facts (Day 11D-1:
+        dimensions, duration, title, uploader — each None when unknown). Implementations must
         enforce `options.timeout_seconds` with a real cancellation
         guarantee (not just "give up waiting") — see PROJECT_SPEC §6.4
         and YtDlpDownloader's module docstring for why.

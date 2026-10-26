@@ -16,8 +16,10 @@ import pytest
 from src.application.use_cases.process_download import ProcessDownloadUseCase
 from src.domain.entities.download_request import DownloadRequest
 from src.domain.entities.user import User
+from src.domain.value_objects.deliverable_media import DeliverableMedia
 from src.domain.value_objects.download_options import DownloadOptions
 from src.domain.value_objects.download_progress import DownloadProgress
+from src.domain.value_objects.download_result import DownloadResult
 
 _MAX_BYTES = 50 * 1024 * 1024
 _TIMEOUT = 1800
@@ -49,7 +51,7 @@ class _FakeStorage:
 
 class _FakeNotifier:
     async def send_file(
-        self, telegram_id: int, file_path: Path, caption: str | None = None
+        self, telegram_id: int, media: DeliverableMedia, caption: str | None = None
     ) -> None:
         pass
 
@@ -88,11 +90,13 @@ class _ProgressEmittingDownloader:
     async def get_preview(self, url: str):  # pragma: no cover — not exercised here
         raise NotImplementedError
 
-    async def download(self, url: str, options: DownloadOptions, progress_callback=None) -> Path:
+    async def download(
+        self, url: str, options: DownloadOptions, progress_callback=None
+    ) -> DownloadResult:
         if progress_callback is not None:
             for event in self._progress_events:
                 await progress_callback(event)
-        return self._result_path
+        return DownloadResult(self._result_path)
 
 
 @pytest.mark.asyncio

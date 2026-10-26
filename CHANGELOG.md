@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `DownloadResult` (path, width, height, duration, title, uploader): `DownloaderPort.download` returns the media facts from yt-dlp's final info (after merge/transcode); `ffprobe` only fills what the info lacks.
+- `DeliverableMedia`: built by `ProcessDownloadUseCase` from the result and the request's spec; `NotifierPort.send_file` takes it instead of a bare path.
+
+### Changed
+
+- `TelegramNotifier` sends a video with known dimensions and duration via `send_video` (`supports_streaming=True`) and an audio track with a duration via `send_audio` (title, performer); `send_document` is the fallback when a fact is missing. Logged as `notifier_file_sent method=…`.
+
+### Fixed
+
+- Every file was sent with `send_document` since Day 5; inline playback depended on Telegram's own heuristic (a 1080p YouTube video or a `/download` TikTok arrived as a file).
+
 ## [1.1.0] - 2026-10-26
 
 Video quality v2: what the user asks for is a `DownloadSpec`, quality is

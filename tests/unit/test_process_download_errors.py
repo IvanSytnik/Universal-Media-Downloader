@@ -22,6 +22,8 @@ from src.domain.exceptions import (
     PrivateContentError,
     UnsupportedURLError,
 )
+from src.domain.value_objects.deliverable_media import DeliverableMedia
+from src.domain.value_objects.download_result import DownloadResult
 from src.infrastructure.localization.fluent_error_localizer import FluentErrorLocalizer
 from src.presentation.telegram.i18n import DEFAULT_LOCALE, create_i18n_core
 
@@ -85,7 +87,7 @@ class _FailingDownloader:
     def __init__(self, exc: Exception) -> None:
         self._exc = exc
 
-    async def download(self, url: str, options: object, progress_callback=None) -> Path:
+    async def download(self, url: str, options: object, progress_callback=None) -> DownloadResult:
         raise self._exc
 
     async def get_preview(self, url: str) -> object:  # pragma: no cover
@@ -105,7 +107,7 @@ class _CapturingNotifier:
         self.texts: list[str] = []
 
     async def send_file(
-        self, telegram_id: int, file_path: Path, caption: str | None = None
+        self, telegram_id: int, media: DeliverableMedia, caption: str | None = None
     ) -> None:
         raise AssertionError("should not be called on a download failure")
 

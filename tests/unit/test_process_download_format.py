@@ -22,7 +22,9 @@ import pytest
 from src.application.use_cases.process_download import ProcessDownloadUseCase
 from src.domain.entities.download_request import DownloadRequest
 from src.domain.entities.user import User
+from src.domain.value_objects.deliverable_media import DeliverableMedia
 from src.domain.value_objects.download_options import DownloadOptions
+from src.domain.value_objects.download_result import DownloadResult
 from src.domain.value_objects.download_spec import AudioSpec, VideoSpec, VideoTier
 
 
@@ -36,9 +38,11 @@ class _CapturingDownloader:
     async def get_preview(self, url: str):  # pragma: no cover - unused here
         raise NotImplementedError
 
-    async def download(self, url: str, options: DownloadOptions, progress_callback=None) -> Path:
+    async def download(
+        self, url: str, options: DownloadOptions, progress_callback=None
+    ) -> DownloadResult:
         self.captured_options = options
-        return Path("/tmp/out.bin")
+        return DownloadResult(Path("/tmp/out.bin"))
 
 
 class _FakeRequestRepo:
@@ -66,7 +70,7 @@ class _FakeStorage:
 
 
 class _FakeNotifier:
-    async def send_file(self, telegram_id: int, file_path: Path, caption=None) -> None:
+    async def send_file(self, telegram_id: int, media: DeliverableMedia, caption=None) -> None:
         return None
 
     async def send_text(self, telegram_id: int, text: str) -> None:  # pragma: no cover

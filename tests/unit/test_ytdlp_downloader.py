@@ -49,6 +49,7 @@ from src.domain.exceptions import (
 )
 from src.domain.value_objects.download_options import DownloadOptions
 from src.domain.value_objects.download_progress import DownloadProgress
+from src.domain.value_objects.download_result import DownloadResult
 from src.domain.value_objects.download_spec import (
     AudioSpec,
     DownloadSpec,
@@ -165,8 +166,8 @@ async def test_download_returns_path_on_success(
         format_kind_value: str,
         video_tier_value: str | None,
         progress_sink: _Sink = None,
-    ) -> str:
-        return expected_path
+    ) -> DownloadResult:
+        return DownloadResult(Path(expected_path))
 
     _install_runner(monkeypatch, _fake_run)
 
@@ -174,7 +175,7 @@ async def test_download_returns_path_on_success(
     options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60)
     result = await downloader.download("https://example.com/video", options)
 
-    assert result == Path(expected_path)
+    assert result.path == Path(expected_path)
 
 
 @pytest.mark.asyncio
@@ -189,7 +190,7 @@ async def test_download_maps_timeout_to_timeout_error(
         format_kind_value: str,
         video_tier_value: str | None,
         progress_sink: _Sink = None,
-    ) -> str:
+    ) -> DownloadResult:
         raise ytdlp_downloader._DownloadTimeoutError("превысило лимит 1 секунд")
 
     _install_runner(monkeypatch, _raise_timeout)
@@ -217,7 +218,7 @@ async def test_download_maps_process_error_to_extraction_error(
         format_kind_value: str,
         video_tier_value: str | None,
         progress_sink: _Sink = None,
-    ) -> str:
+    ) -> DownloadResult:
         # This diagnostic-rich message must NOT leak into the raised
         # exception's text (it may contain container paths, signed CDN
         # URLs, etc.) — it belongs in the log only.
@@ -251,7 +252,7 @@ async def test_download_maps_file_too_large_to_categorized_error(
         format_kind_value: str,
         video_tier_value: str | None,
         progress_sink: _Sink = None,
-    ) -> str:
+    ) -> DownloadResult:
         # Day 10: the internal error carries the numbers, not a pre-baked
         # (hardcoded-language) sentence.
         raise ytdlp_downloader._FileTooLargeError(estimated_mb=178, limit_mb=50)
@@ -379,11 +380,11 @@ async def test_download_wires_progress_callback_through_to_domain(
         format_kind_value: str,
         video_tier_value: str | None,
         progress_sink: _Sink = None,
-    ) -> str:
+    ) -> DownloadResult:
         assert progress_sink is not None
         progress_sink({"downloaded_bytes": 10, "total_bytes": 100, "speed": 5.0, "eta": 9})
         progress_sink(None)
-        return expected_path
+        return DownloadResult(Path(expected_path))
 
     _install_runner(monkeypatch, _fake_run_download_in_process)
 
@@ -393,7 +394,7 @@ async def test_download_wires_progress_callback_through_to_domain(
         "https://example.com/video", options, progress_callback=_progress_callback
     )
 
-    assert result == Path(expected_path)
+    assert result.path == Path(expected_path)
     # No polling needed: download() only returns after drain_task itself
     # returns (awaited in its finally), which only happens once it has
     # processed the None stop marker — and every real item sent before
@@ -420,9 +421,9 @@ async def test_download_without_progress_callback_passes_none_sink(
         format_kind_value: str,
         video_tier_value: str | None,
         progress_sink: _Sink = None,
-    ) -> str:
+    ) -> DownloadResult:
         captured["progress_sink"] = progress_sink
-        return expected_path
+        return DownloadResult(Path(expected_path))
 
     _install_runner(monkeypatch, _fake_run_download_in_process)
 
@@ -445,10 +446,10 @@ def _capturing_runner(captured: dict[str, Any], result: str) -> Any:
         format_kind_value: str,
         video_tier_value: str | None,
         progress_sink: _Sink = None,
-    ) -> str:
+    ) -> DownloadResult:
         captured["format_kind_value"] = format_kind_value
         captured["video_tier_value"] = video_tier_value
-        return result
+        return DownloadResult(Path(result))
 
     return _fake_run_download_in_process
 

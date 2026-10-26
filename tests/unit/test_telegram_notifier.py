@@ -1,13 +1,21 @@
-"""TelegramNotifier tests — Bot is mocked, no real Telegram API calls."""
+"""TelegramNotifier tests — Bot is mocked, no real Telegram API calls.
+
+Day 11D-1: the delivery method follows the media — a video with its
+facts is a ``send_video``, an audio track with a duration a
+``send_audio``, anything missing a fact a ``send_document``.
+"""
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 from aiogram.exceptions import TelegramAPIError
 
 from src.domain.exceptions import NotifierError
+from src.domain.value_objects.deliverable_media import DeliverableMedia
+from src.domain.value_objects.format_kind import FormatKind
 from src.infrastructure.notifier.telegram_notifier import TelegramNotifier
 
 TEST_MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024
@@ -25,75 +33,135 @@ def _notifier(bot: AsyncMock, max_bytes: int = TEST_MAX_FILE_SIZE_BYTES) -> Tele
     )
 
 
-@pytest.mark.asyncio
-async def test_send_file_rejects_oversized_file(tmp_path) -> None:
-    big_file = tmp_path / "big.mp4"
-    big_file.write_bytes(b"x" * (TEST_MAX_FILE_SIZE_BYTES + 1))
+def _file(tmp_path: Path, size: int = 13, name: str = "v.mp4") -> Path:
+    path = tmp_path / name
+    path.write_bytes(b"x" * size)
+    return path
 
+
+def _video(path: Path, **overrides: object) -> DeliverableMedia:
+    facts: dict[str, object] = {
+        "width": 1080,
+        "height": 1920,
+        "duration_seconds": 38,
+        "title": "t",
+        "performer": "p",
+    }
+    facts.update(overrides)
+    return DeliverableMedia(path=path, kind=FormatKind.VIDEO, **facts)  # type: ignore[arg-type]
+
+
+def _audio(path: Path, **overrides: object) -> DeliverableMedia:
+    facts: dict[str, object] = {
+        "duration_seconds": 2808,
+        "title": "Talk <live>",
+        "performer": "Chan & Co",
+    }
+    facts.update(overrides)
+    return DeliverableMedia(path=path, kind=FormatKind.AUDIO, **facts)  # type: ignore[arg-type]
+
+
+# --- method selection ------------------------------------------------------------
+
+
+async def test_video_with_facts_is_sent_as_a_streamable_video(tmp_path: Path) -> None:
     bot = AsyncMock()
-    notifier = _notifier(bot)
+    await _notifier(bot).send_file(1, _video(_file(tmp_path)))
+
+    bot.send_video.assert_awaited_once()
+    bot.send_document.assert_not_called()
+    kwargs = bot.send_video.call_args.kwargs
+    assert (kwargs["width"], kwargs["height"], kwargs["duration"]) == (1080, 1920, 38)
+    assert kwargs["supports_streaming"] is True
+    assert kwargs["request_timeout"] == TEST_UPLOAD_TIMEOUT_SECONDS
+
+
+async def test_audio_with_duration_is_sent_to_the_player(tmp_path: Path) -> None:
+    bot = AsyncMock()
+    await _notifier(bot).send_file(1, _audio(_file(tmp_path, name="a.mp3")))
+
+    bot.send_audio.assert_awaited_once()
+    kwargs = bot.send_audio.call_args.kwargs
+    assert kwargs["duration"] == 2808
+    # Player fields are plain text, not parse_mode HTML: no escaping.
+    assert (kwargs["title"], kwargs["performer"]) == ("Talk <live>", "Chan & Co")
+    assert kwargs["request_timeout"] == TEST_UPLOAD_TIMEOUT_SECONDS
+
+
+@pytest.mark.parametrize("missing", ["width", "height", "duration_seconds"])
+async def test_video_missing_a_fact_falls_back_to_a_document(tmp_path: Path, missing: str) -> None:
+    # Made-up dimensions would render the video distorted.
+    bot = AsyncMock()
+    await _notifier(bot).send_file(1, _video(_file(tmp_path), **{missing: None}))
+
+    bot.send_video.assert_not_called()
+    bot.send_document.assert_awaited_once()
+
+
+async def test_audio_without_duration_falls_back_to_a_document(tmp_path: Path) -> None:
+    bot = AsyncMock()
+    await _notifier(bot).send_file(1, _audio(_file(tmp_path), duration_seconds=None))
+
+    bot.send_audio.assert_not_called()
+    bot.send_document.assert_awaited_once()
+
+
+async def test_caption_is_html_escaped_on_every_method(tmp_path: Path) -> None:
+    # Same reasoning as preview.py's title escaping (Day 4): captions can
+    # contain untrusted text.
+    path = _file(tmp_path)
+    for media, method in (
+        (_video(path), "send_video"),
+        (_audio(path), "send_audio"),
+        (_video(path, width=None), "send_document"),
+    ):
+        bot = AsyncMock()
+        await _notifier(bot).send_file(1, media, caption="Tom & Jerry")
+        assert getattr(bot, method).call_args.kwargs["caption"] == "Tom &amp; Jerry"
+
+
+# --- size ceiling and errors -------------------------------------------------------
+
+
+async def test_send_file_rejects_oversized_file(tmp_path: Path) -> None:
+    bot = AsyncMock()
 
     with pytest.raises(NotifierError, match="слишком большой"):
-        await notifier.send_file(telegram_id=1, file_path=big_file)
+        await _notifier(bot).send_file(1, _video(_file(tmp_path, TEST_MAX_FILE_SIZE_BYTES + 1)))
 
+    bot.send_video.assert_not_called()
     bot.send_document.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_send_file_calls_bot_for_normal_sized_file(tmp_path) -> None:
-    small_file = tmp_path / "small.mp4"
-    small_file.write_bytes(b"small content")
-
-    bot = AsyncMock()
-    notifier = _notifier(bot)
-
-    await notifier.send_file(telegram_id=1, file_path=small_file, caption="Tom & Jerry")
-
-    bot.send_document.assert_awaited_once()
-    _, kwargs = bot.send_document.call_args
-    assert kwargs["chat_id"] == 1
-    # Caption must be HTML-escaped — same reasoning as preview.py's title
-    # escaping (Day 4 fix): captions can contain untrusted text.
-    assert kwargs["caption"] == "Tom &amp; Jerry"
-
-
-@pytest.mark.asyncio
-async def test_send_file_respects_injected_limit_not_a_hardcoded_one(tmp_path) -> None:
+async def test_send_file_respects_injected_limit_not_a_hardcoded_one(tmp_path: Path) -> None:
     """Day 6 regression guard: the limit must come from the constructor
     argument, not from a module-level constant — that constant was
     removed specifically because it was duplicated (and could silently
     drift) with an identical one in ProcessDownloadUseCase."""
-    file_path = tmp_path / "video.mp4"
-    file_path.write_bytes(b"x" * (2 * 1024 * 1024))  # 2MB
-
     bot = AsyncMock()
     # A tiny injected limit (1MB) must reject a 2MB file even though
     # it's far under the old hardcoded 50MB constant.
     notifier = _notifier(bot, max_bytes=1 * 1024 * 1024)
 
     with pytest.raises(NotifierError, match="слишком большой"):
-        await notifier.send_file(telegram_id=1, file_path=file_path)
+        await notifier.send_file(1, _video(_file(tmp_path, 2 * 1024 * 1024)))
 
 
-@pytest.mark.asyncio
-async def test_send_file_wraps_telegram_api_error() -> None:
-    small_file_bot = AsyncMock()
-    small_file_bot.send_document.side_effect = TelegramAPIError(
-        method="sendDocument", message="boom"
-    )
-    notifier = _notifier(small_file_bot)
+@pytest.mark.parametrize("method", ["send_video", "send_audio", "send_document"])
+async def test_telegram_api_error_is_wrapped_for_every_method(tmp_path: Path, method: str) -> None:
+    bot = AsyncMock()
+    getattr(bot, method).side_effect = TelegramAPIError(method=method, message="boom")
+    path = _file(tmp_path)
+    media = {
+        "send_video": _video(path),
+        "send_audio": _audio(path),
+        "send_document": _video(path, height=None),
+    }[method]
 
-    import tempfile
-    from pathlib import Path
-
-    with tempfile.NamedTemporaryFile(suffix=".mp4") as f:
-        f.write(b"content")
-        f.flush()
-        with pytest.raises(NotifierError):
-            await notifier.send_file(telegram_id=1, file_path=Path(f.name))
+    with pytest.raises(NotifierError):
+        await _notifier(bot).send_file(1, media)
 
 
-@pytest.mark.asyncio
 async def test_send_text_escapes_html() -> None:
     bot = AsyncMock()
     notifier = _notifier(bot)
