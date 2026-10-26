@@ -35,6 +35,8 @@ async def test_returns_preview_for_valid_url() -> None:
         uploader="Test Channel",
         thumbnail_url="https://example.com/thumb.jpg",
         media_type=MediaType.VIDEO,
+        extractor_key="youtube",
+        max_compatible_short_side=1080,
     )
     downloader = FakeDownloader(preview=expected)
     use_case = PreviewDownloadUseCase(downloader)

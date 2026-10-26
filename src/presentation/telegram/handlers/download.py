@@ -8,6 +8,21 @@ a second message being sent. Trade-off: an invalid link now briefly
 shows "download started" before flipping to the error, whereas before
 the error appeared immediately — accepted so progress always has
 somewhere to go, consistent with download_flow.py's guided path.
+
+Day 11C (v2): FormatPolicy needs the source's extractor, which only a
+preview knows, so /download now fetches one before requesting. Without
+it this command would be a way around the per-source kill-switch the
+guided flow enforces. Side effect: extraction failures (private, geo,
+removed...) surface here, categorized, instead of later from the worker.
+No choice is offered on this path: the spec is
+``FormatPolicy.default_video_spec`` — what the card's video button would
+download (vbest without a quality step, else 720p). Video disabled for
+the source is refused by the use case with ``error-format-not-allowed``,
+exactly like a button.
+
+The link is checked against the domain allowlist BEFORE the preview, as
+in the guided flow: the preview now runs yt-dlp in the bot process, and
+it must not do so for a site the bot doesn't support.
 """
 
 from __future__ import annotations
@@ -18,11 +33,13 @@ from aiogram import Router
 from aiogram.types import Message
 from aiogram_i18n import I18nContext
 
+from src.application.policies.format_policy import FormatPolicy
 from src.config.settings import Settings
-from src.domain.exceptions import UnsupportedURLError
+from src.domain.exceptions import ExtractionError, FormatNotAllowedError, UnsupportedURLError
 from src.domain.interfaces.rate_limiter import RateLimiterPort
+from src.domain.value_objects.url_validation import validate_url_against_allowlist
 from src.presentation.telegram.dependencies import UseCaseProvider
-from src.presentation.telegram.formatting import format_retry_after
+from src.presentation.telegram.formatting import format_download_error, format_retry_after
 from src.shared.logging import get_logger
 
 router = Router(name="download")
@@ -36,6 +53,7 @@ async def handle_download(
     use_cases: UseCaseProvider,
     settings: Settings,
     rate_limiter: RateLimiterPort,
+    format_policy: FormatPolicy,
 ) -> None:
     if message.from_user is None:
         return
@@ -46,7 +64,13 @@ async def handle_download(
         await message.answer(i18n.get("download-usage"))
         return
 
-    url = parts[1].strip()
+    try:
+        url = validate_url_against_allowlist(
+            parts[1].strip(), settings.allowed_domains_set, settings.blocked_domains_set
+        )
+    except UnsupportedURLError as exc:
+        await message.answer(i18n.get("error-bad-url", reason=html_escape(str(exc))))
+        return
     telegram_id = message.from_user.id
 
     verdict = await rate_limiter.acquire(
@@ -61,16 +85,30 @@ async def handle_download(
 
     status_message = await message.answer(i18n.get("download-started"))
 
+    try:
+        preview = await use_cases.preview_download().execute(url)
+    except UnsupportedURLError as exc:
+        await status_message.edit_text(i18n.get("error-bad-url", reason=html_escape(str(exc))))
+        return
+    except ExtractionError as exc:
+        await status_message.edit_text(format_download_error(i18n, exc))
+        return
+
     async with use_cases.request_download() as use_case:
         try:
             request = await use_case.execute(
                 telegram_id,
                 url,
+                format_policy.default_video_spec(preview),
+                preview.extractor_key,
                 chat_id=status_message.chat.id,
                 message_id=status_message.message_id,
             )
         except UnsupportedURLError as exc:
             await status_message.edit_text(i18n.get("error-bad-url", reason=html_escape(str(exc))))
+            return
+        except FormatNotAllowedError as exc:
+            await status_message.edit_text(format_download_error(i18n, exc))
             return
 
     logger.info("download_requested", request_id=str(request.id), telegram_id=telegram_id)

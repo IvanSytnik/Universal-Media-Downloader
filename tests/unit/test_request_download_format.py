@@ -1,11 +1,10 @@
-"""Day 11A: format_kind threads from the confirm button through
-RequestDownloadUseCase onto the persisted request. These tests cover the
-default (video — backward compatible) and the explicit audio path, using
-in-memory fakes for the repos and queue.
+"""Day 11A/11C: the user's DownloadSpec threads from the confirm button
+through RequestDownloadUseCase onto the persisted request. These tests
+cover the default (720p video — backward compatible) and each explicit
+spec, using in-memory fakes for the repos and queue.
 
-Day 11C stage 3: the same WRITE chain for quality_kind. The matching
-READ chain (worker → DownloadOptions) is guarded separately in
-test_process_download_quality.py — 11A.1 was precisely the case where
+The matching READ chain (worker → DownloadOptions) is guarded separately
+in test_process_download_spec.py — 11A.1 was precisely the case where
 the write half was right and the read half was missing, so the two
 halves get their own tests rather than one that could pass on either.
 """
@@ -16,11 +15,17 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from src.application.policies.format_policy import FormatPolicy
 from src.application.use_cases.request_download import RequestDownloadUseCase
 from src.domain.entities.download_request import DownloadRequest
 from src.domain.entities.user import User
-from src.domain.value_objects.format_kind import FormatKind
-from src.domain.value_objects.quality_kind import QualityKind
+from src.domain.value_objects.download_spec import (
+    DEFAULT_DOWNLOAD_SPEC,
+    AudioSpec,
+    DownloadSpec,
+    VideoSpec,
+    VideoTier,
+)
 
 
 class _FakeUserRepo:
@@ -59,82 +64,47 @@ def _make_user() -> User:
 
 
 @pytest.mark.asyncio
-async def test_defaults_to_video() -> None:
+async def test_default_spec_is_720p_video() -> None:
+    # /download passes DEFAULT_DOWNLOAD_SPEC — it must keep the exact
+    # behaviour it had.
     repo = _FakeRequestRepo()
     queue = _FakeQueue()
-    use_case = RequestDownloadUseCase(_FakeUserRepo(_make_user()), repo, queue)
-
-    request = await use_case.execute(42, "https://youtube.com/watch?v=x", chat_id=1, message_id=2)
-
-    assert request.format_kind is FormatKind.VIDEO
-    assert repo.created is not None
-    assert repo.created.format_kind is FormatKind.VIDEO
-    assert queue.enqueued == request.id
-
-
-@pytest.mark.asyncio
-async def test_explicit_audio_persisted() -> None:
-    repo = _FakeRequestRepo()
-    queue = _FakeQueue()
-    use_case = RequestDownloadUseCase(_FakeUserRepo(_make_user()), repo, queue)
-
-    request = await use_case.execute(
-        42, "https://youtube.com/watch?v=x", FormatKind.AUDIO, chat_id=1, message_id=2
-    )
-
-    assert request.format_kind is FormatKind.AUDIO
-    assert repo.created is not None
-    assert repo.created.format_kind is FormatKind.AUDIO
-
-
-def test_entity_and_create_default_video() -> None:
-    # Entity-level default: unchanged construction still yields video.
-    req = DownloadRequest.create(user_id=uuid4(), source_url="https://x.y")
-    assert req.format_kind is FormatKind.VIDEO
-    # Day 11C: quality defaults alongside it — 720p, matching the
-    # downloader default from stage 1.
-    assert req.quality_kind is QualityKind.HD_720
-
-
-def test_entity_create_accepts_explicit_quality() -> None:
-    req = DownloadRequest.create(
-        user_id=uuid4(),
-        source_url="https://x.y",
-        quality_kind=QualityKind.HD_1080,
-    )
-    assert req.quality_kind is QualityKind.HD_1080
-
-
-@pytest.mark.asyncio
-async def test_explicit_quality_persisted() -> None:
-    repo = _FakeRequestRepo()
-    queue = _FakeQueue()
-    use_case = RequestDownloadUseCase(_FakeUserRepo(_make_user()), repo, queue)
+    use_case = RequestDownloadUseCase(_FakeUserRepo(_make_user()), repo, queue, FormatPolicy({}))
 
     request = await use_case.execute(
         42,
         "https://youtube.com/watch?v=x",
-        FormatKind.VIDEO,
-        QualityKind.HD_1080,
+        DEFAULT_DOWNLOAD_SPEC,
+        "youtube",
         chat_id=1,
         message_id=2,
     )
 
-    assert request.quality_kind is QualityKind.HD_1080
+    assert request.spec == VideoSpec(VideoTier.P720)
     assert repo.created is not None
-    assert repo.created.quality_kind is QualityKind.HD_1080
+    assert repo.created.spec == VideoSpec(VideoTier.P720)
+    assert queue.enqueued == request.id
 
 
+@pytest.mark.parametrize(
+    "spec",
+    [VideoSpec(VideoTier.P1080), VideoSpec(VideoTier.BEST), AudioSpec()],
+)
 @pytest.mark.asyncio
-async def test_quality_defaults_to_720_when_caller_omits_it() -> None:
-    # /download and every pre-stage-4 caller pass nothing — they must
-    # keep the exact behaviour they had.
+async def test_explicit_spec_persisted(spec: DownloadSpec) -> None:
     repo = _FakeRequestRepo()
     queue = _FakeQueue()
-    use_case = RequestDownloadUseCase(_FakeUserRepo(_make_user()), repo, queue)
+    use_case = RequestDownloadUseCase(_FakeUserRepo(_make_user()), repo, queue, FormatPolicy({}))
 
-    request = await use_case.execute(42, "https://youtube.com/watch?v=x", chat_id=1, message_id=2)
+    request = await use_case.execute(
+        42, "https://youtube.com/watch?v=x", spec, "youtube", chat_id=1, message_id=2
+    )
 
-    assert request.quality_kind is QualityKind.HD_720
+    assert request.spec == spec
     assert repo.created is not None
-    assert repo.created.quality_kind is QualityKind.HD_720
+    assert repo.created.spec == spec
+
+
+def test_entity_create_defaults_to_default_spec() -> None:
+    req = DownloadRequest.create(user_id=uuid4(), source_url="https://x.y")
+    assert req.spec == DEFAULT_DOWNLOAD_SPEC == VideoSpec(VideoTier.P720)

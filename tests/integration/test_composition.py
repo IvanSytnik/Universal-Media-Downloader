@@ -13,12 +13,12 @@ from uuid import UUID
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from src.application.policies.format_policy import FormatPolicy
 from src.application.use_cases.preview_download import PreviewDownloadUseCase
 from src.application.use_cases.trigger_ping_job import TriggerPingJobUseCase
 from src.composition import SqlAlchemyUseCaseProvider
 from src.domain.entities.download_request import DownloadRequest
-from src.domain.value_objects.format_kind import FormatKind
-from src.domain.value_objects.quality_kind import QualityKind
+from src.domain.value_objects.download_spec import AudioSpec
 from src.infrastructure.database.engine import Base
 from src.infrastructure.database.repositories.download_request_repository import (
     SqlAlchemyDownloadRequestRepository,
@@ -60,6 +60,7 @@ def provider(session_factory: Any, task_queue: _FakeTaskQueue) -> SqlAlchemyUseC
         session_factory=session_factory,
         task_queue=task_queue,
         downloader=object(),  # type: ignore[arg-type]  # never called here
+        format_policy=FormatPolicy({}),
     )
 
 
@@ -109,8 +110,8 @@ async def test_request_download_persists_and_enqueues(
         request: DownloadRequest = await request_download.execute(
             300,
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-            FormatKind.AUDIO,
-            QualityKind.HD_1080,
+            AudioSpec(),
+            "youtube",
             chat_id=1,
             message_id=2,
         )
@@ -119,7 +120,7 @@ async def test_request_download_persists_and_enqueues(
     async with session_factory() as session:
         stored = await SqlAlchemyDownloadRequestRepository(session).get_by_id(request.id)
     assert stored is not None
-    assert stored.format_kind is FormatKind.AUDIO
+    assert stored.spec == AudioSpec()
 
 
 def test_stateless_use_cases_share_adapters(

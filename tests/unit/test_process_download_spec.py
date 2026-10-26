@@ -1,4 +1,4 @@
-"""Day 11C stage 3 — the READ link for quality_kind (lesson 11A.1).
+"""Day 11C — the READ link for the request's DownloadSpec (lesson 11A.1).
 
 This is the test that did not exist for ``format_kind`` in 11A, which is
 exactly why the MP3 button shipped delivering video: the field was
@@ -7,9 +7,10 @@ VIDEO default won, and every existing use-case test mocked the downloader
 without ever looking at the options it received.
 
 So the downloader fake here CAPTURES the options and the assertions are
-on what it captured. Both tiers are checked, and 720 vs 1080 are checked
-against each other — a test that only ever asserted HD_720 would pass
-against a hardcoded default just as happily as against real plumbing.
+on what it captured. Every spec shape is checked, including the
+non-default ones — a test that only ever asserted the 720p default would
+pass against a hardcoded default just as happily as against real
+plumbing.
 """
 
 from __future__ import annotations
@@ -23,8 +24,13 @@ from src.application.use_cases.process_download import ProcessDownloadUseCase
 from src.domain.entities.download_request import DownloadRequest
 from src.domain.entities.user import User
 from src.domain.value_objects.download_options import DownloadOptions
-from src.domain.value_objects.format_kind import FormatKind
-from src.domain.value_objects.quality_kind import QualityKind
+from src.domain.value_objects.download_spec import (
+    DEFAULT_DOWNLOAD_SPEC,
+    AudioSpec,
+    DownloadSpec,
+    VideoSpec,
+    VideoTier,
+)
 
 
 class _CapturingDownloader:
@@ -91,14 +97,9 @@ class _NoopPublisher:
         return None
 
 
-async def _capture(quality: QualityKind, fmt: FormatKind = FormatKind.VIDEO) -> DownloadOptions:
+async def _capture(spec: DownloadSpec) -> DownloadOptions:
     user = User(id=uuid4(), telegram_id=42)
-    request = DownloadRequest.create(
-        user_id=user.id,
-        source_url="https://example.com/v",
-        format_kind=fmt,
-        quality_kind=quality,
-    )
+    request = DownloadRequest.create(user_id=user.id, source_url="https://example.com/v", spec=spec)
     downloader = _CapturingDownloader()
 
     use_case = ProcessDownloadUseCase(
@@ -118,28 +119,30 @@ async def _capture(quality: QualityKind, fmt: FormatKind = FormatKind.VIDEO) -> 
     return downloader.captured_options
 
 
-@pytest.mark.parametrize("quality", [QualityKind.HD_720, QualityKind.HD_1080])
+@pytest.mark.parametrize(
+    "spec",
+    [
+        VideoSpec(VideoTier.P720),
+        VideoSpec(VideoTier.P1080),
+        VideoSpec(VideoTier.BEST),
+        AudioSpec(),
+    ],
+)
 @pytest.mark.asyncio
-async def test_persisted_quality_reaches_download_options(quality: QualityKind) -> None:
-    options = await _capture(quality)
-    assert options.quality_kind is quality
+async def test_persisted_spec_reaches_download_options(spec: DownloadSpec) -> None:
+    options = await _capture(spec)
+    assert options.spec == spec
 
 
+@pytest.mark.parametrize(
+    "spec", [VideoSpec(VideoTier.P1080), VideoSpec(VideoTier.BEST), AudioSpec()]
+)
 @pytest.mark.asyncio
-async def test_1080_is_not_silently_downgraded_to_the_default() -> None:
+async def test_non_default_spec_is_not_silently_replaced_by_the_default(
+    spec: DownloadSpec,
+) -> None:
     # The specific 11A.1 failure shape: plumbing missing, default wins,
-    # nothing looks wrong. Asserting the non-default tier survives is
-    # what makes this test able to fail.
-    options = await _capture(QualityKind.HD_1080)
-    assert options.quality_kind is not QualityKind.HD_720
-    assert options.quality_kind.max_height == 1080
-
-
-@pytest.mark.asyncio
-async def test_quality_travels_independently_of_format() -> None:
-    # Both fields are read off the same request; a copy-paste that read
-    # format twice (or quality twice) would still pass a single-field
-    # test. This pins the pair.
-    options = await _capture(QualityKind.HD_1080, FormatKind.AUDIO)
-    assert options.format_kind is FormatKind.AUDIO
-    assert options.quality_kind is QualityKind.HD_1080
+    # nothing looks wrong. Asserting a non-default spec survives is what
+    # makes this test able to fail.
+    options = await _capture(spec)
+    assert options.spec != DEFAULT_DOWNLOAD_SPEC

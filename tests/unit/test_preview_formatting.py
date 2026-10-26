@@ -28,6 +28,8 @@ def _preview(title: str, uploader: str | None = "Some Channel") -> MediaPreview:
         uploader=uploader,
         thumbnail_url=None,
         media_type=MediaType.VIDEO,
+        extractor_key="youtube",
+        max_compatible_short_side=1080,
     )
 
 

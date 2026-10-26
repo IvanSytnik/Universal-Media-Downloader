@@ -13,6 +13,13 @@ Domain-only: no yt-dlp format strings here. The mapping from this intent
 to concrete ``ydl_opts`` (format selector, FFmpegExtractAudio
 postprocessor) lives in the infrastructure downloader, where extractor
 specifics belong.
+
+Day 11C (v2): the request now carries a ``DownloadSpec`` (see
+download_spec.py); this enum remains as the persisted discriminator
+column and is derived from the spec with ``spec_kind``. It no longer has
+a lenient ``from_db_value``: a stored kind is only meaningful together
+with its ``video_tier`` column, and ``spec_from_parts`` parses the pair
+strictly.
 """
 
 from __future__ import annotations
@@ -23,19 +30,3 @@ from enum import StrEnum
 class FormatKind(StrEnum):
     VIDEO = "video"
     AUDIO = "audio"
-
-    @classmethod
-    def from_db_value(cls, value: str) -> FormatKind:
-        """Parse a stored value, degrading to VIDEO instead of raising.
-
-        VIDEO is the pre-Day-11A behaviour and the column's
-        server_default, so an unreadable value falls back to what the
-        row would have meant before this field existed. Delivering a
-        video where mp3 was asked for is a visible, recoverable mistake
-        (the user retries); a ``ValueError`` inside the worker is an
-        invisible one — the user gets nothing.
-        """
-        try:
-            return cls(value)
-        except ValueError:
-            return cls.VIDEO

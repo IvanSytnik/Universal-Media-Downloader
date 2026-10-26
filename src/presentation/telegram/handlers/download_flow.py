@@ -28,7 +28,7 @@ yt-dlp diagnostics — so the two catch sites stay separate.
 Day 11A — the preview card now offers two confirm buttons (video / mp3).
 Both share one token; the chosen format is encoded in the callback
 payload and parsed by ``parse_confirm_callback``. The parsed
-``FormatKind`` is threaded into RequestDownloadUseCase, which persists it
+``DownloadSpec`` (Day 11C v2) is threaded into RequestDownloadUseCase, which persists it
 on the request so the worker downloads the right thing. Everything else
 about the confirm path (token lookup, rate limit ordering, stale-preview
 handling) is unchanged.
@@ -37,6 +37,14 @@ Everything else is unchanged: URLs are stashed under a short token
 (callback_data can't hold a URL), the confirm button resolves the token
 and calls the same RequestDownloadUseCase /download uses, the Application
 layer contract is the same bar the new optional argument.
+
+Day 11C (v2) — every keyboard on the card is rendered from
+``FormatPolicy.offered_choices`` over the stored PreviewContext (the
+extractor and short side the preview OBSERVED), so ``q:``/``back:``
+re-derive the buttons on each tap instead of trusting what the previous
+markup showed: a kill-switch flipped while the card sat in the chat is
+reflected on the next tap. ``q:`` on a card whose source no longer has a
+quality step just re-renders step 1.
 
 Day 11B — real-time progress needs a concrete (chat_id, message_id) to
 edit, so ``handle_confirm_download`` now requires ``callback.message`` to
@@ -55,10 +63,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from aiogram_i18n import I18nContext
 
+from src.application.policies.format_policy import FormatPolicy, OfferedChoices
 from src.config.settings import Settings
-from src.domain.exceptions import ExtractionError, UnsupportedURLError
+from src.domain.exceptions import ExtractionError, FormatNotAllowedError, UnsupportedURLError
 from src.domain.interfaces.preview_context_store import PreviewContextStorePort
 from src.domain.interfaces.rate_limiter import RateLimiterPort
+from src.domain.value_objects.preview_context import PreviewContext
 from src.domain.value_objects.url_validation import validate_url_against_allowlist
 from src.presentation.telegram.dependencies import UseCaseProvider
 from src.presentation.telegram.formatting import (
@@ -121,6 +131,7 @@ async def _show_preview(
     preview_store: PreviewContextStorePort,
     rate_limiter: RateLimiterPort,
     use_cases: UseCaseProvider,
+    format_policy: FormatPolicy,
 ) -> None:
     """Shared preview step for both entry points. Validation runs BEFORE
     the rate-limit check so a typo doesn't burn a preview slot."""
@@ -154,13 +165,26 @@ async def _show_preview(
         await status_message.edit_text(format_download_error(i18n, exc))
         return
 
-    token = await preview_store.save(validated_url)
-    logger.info("flow_preview_shown", url=validated_url, token=token)
+    # Day 11C (v2): store what the preview OBSERVED next to the URL; the
+    # buttons later act on this, never on anything the callback claims.
+    context = PreviewContext.from_preview(preview)
+    token = await preview_store.save(context)
+    logger.info(
+        "flow_preview_shown",
+        url=validated_url,
+        token=token,
+        extractor_key=preview.extractor_key,
+        max_compatible_short_side=preview.max_compatible_short_side,
+    )
 
     await status_message.edit_text(
         format_preview(i18n, preview),
-        reply_markup=preview_confirm_keyboard(i18n, token),
+        reply_markup=preview_confirm_keyboard(i18n, token, _choices(format_policy, context)),
     )
+
+
+def _choices(format_policy: FormatPolicy, context: PreviewContext) -> OfferedChoices:
+    return format_policy.offered_choices(context.extractor_key, context.max_compatible_short_side)
 
 
 # --- Entry point 1: main-menu buttons (text-routed, localized) ------------
@@ -207,6 +231,7 @@ async def handle_url_in_state(
     preview_store: PreviewContextStorePort,
     rate_limiter: RateLimiterPort,
     use_cases: UseCaseProvider,
+    format_policy: FormatPolicy,
 ) -> None:
     await state.clear()
     await _show_preview(
@@ -217,6 +242,7 @@ async def handle_url_in_state(
         preview_store,
         rate_limiter,
         use_cases,
+        format_policy,
     )
 
 
@@ -231,6 +257,7 @@ async def handle_plain_url(
     preview_store: PreviewContextStorePort,
     rate_limiter: RateLimiterPort,
     use_cases: UseCaseProvider,
+    format_policy: FormatPolicy,
 ) -> None:
     await _show_preview(
         message,
@@ -240,6 +267,7 @@ async def handle_plain_url(
         preview_store,
         rate_limiter,
         use_cases,
+        format_policy,
     )
 
 
@@ -251,6 +279,7 @@ async def handle_open_quality_picker(
     callback: CallbackQuery,
     i18n: I18nContext,
     preview_store: PreviewContextStorePort,
+    format_policy: FormatPolicy,
 ) -> None:
     """Step 1 -> 2: swap the card's markup for the tier picker.
 
@@ -259,16 +288,29 @@ async def handle_open_quality_picker(
     dead card. It IS checked, though — showing tiers for an expired
     preview would just move the failure one tap later, after the user
     has made a choice, which is a worse place to learn about it.
+
+    The tiers come from the policy over the stored context, not from the
+    payload; if there is no quality step (any more — video disabled since
+    the card was rendered, or a forged ``q:``), step 1 is re-rendered.
     """
     token = (callback.data or "")[len(CB_QUALITY_PREFIX) :]
-    if await preview_store.get(token) is None:
+    context = await preview_store.get(token)
+    if context is None:
         await callback.answer(i18n.get("flow-preview-stale"), show_alert=True)
         return
 
+    choices = _choices(format_policy, context)
     if isinstance(callback.message, Message):
         # Only the markup changes — the preview text stays put, so the
         # card doesn't flicker and nothing needs re-escaping.
-        await callback.message.edit_reply_markup(reply_markup=quality_picker_keyboard(i18n, token))
+        markup = (
+            quality_picker_keyboard(
+                i18n, token, choices.video_tiers, context.max_compatible_short_side
+            )
+            if choices.has_quality_step
+            else preview_confirm_keyboard(i18n, token, choices)
+        )
+        await callback.message.edit_reply_markup(reply_markup=markup)
     await callback.answer()
 
 
@@ -277,16 +319,20 @@ async def handle_back_to_format(
     callback: CallbackQuery,
     i18n: I18nContext,
     preview_store: PreviewContextStorePort,
+    format_policy: FormatPolicy,
 ) -> None:
     """Step 2 -> 1. Same token, nothing consumed on either leg, so the
     user can bounce between the two steps until the TTL runs out."""
     token = (callback.data or "")[len(CB_BACK_PREFIX) :]
-    if await preview_store.get(token) is None:
+    context = await preview_store.get(token)
+    if context is None:
         await callback.answer(i18n.get("flow-preview-stale"), show_alert=True)
         return
 
     if isinstance(callback.message, Message):
-        await callback.message.edit_reply_markup(reply_markup=preview_confirm_keyboard(i18n, token))
+        await callback.message.edit_reply_markup(
+            reply_markup=preview_confirm_keyboard(i18n, token, _choices(format_policy, context))
+        )
     await callback.answer()
 
 
@@ -303,17 +349,17 @@ async def handle_confirm_download(
     # Day 11C stage 4: for video it carries the quality tier too. The
     # parser tolerates every older form (bare "dl:<token>", tierless
     # "dl:<token>:v"), so buttons rendered before this deploy still work
-    # and degrade to HD_720 — what those buttons actually did.
-    token, format_kind, quality_kind = parse_confirm_callback(callback.data or "")
+    # and degrade to DEFAULT_DOWNLOAD_SPEC (720p) — what they actually did.
+    token, spec = parse_confirm_callback(callback.data or "")
 
     # Day 11C stage 4: CLAIM the token atomically instead of get-then-
     # delete-later. This is the whole double-tap guard: two fast taps on
     # 720p used to both read the URL before either delete landed, and
     # enqueued two downloads. Now the loser gets None and falls into the
     # stale-preview branch below.
-    url = await preview_store.pop(token)
+    context = await preview_store.pop(token)
 
-    if url is None:
+    if context is None:
         await callback.answer(i18n.get("flow-preview-stale"), show_alert=True)
         return
 
@@ -346,12 +392,25 @@ async def handle_confirm_download(
         try:
             request = await use_case.execute(
                 telegram_id,
-                url,
-                format_kind,
-                quality_kind,
+                context.url,
+                spec,
+                # From the stored preview, never from callback data.
+                context.extractor_key,
                 chat_id=chat_id,
                 message_id=message_id,
             )
+        except FormatNotAllowedError as exc:
+            # A card rendered before the kill-switch was flipped, or a
+            # forged payload. The token is already consumed — correct: the
+            # card offers something we refuse, it should not stay live.
+            logger.info(
+                "flow_format_not_allowed",
+                telegram_id=telegram_id,
+                extractor_key=context.extractor_key,
+                spec=repr(spec),
+            )
+            await callback.answer(format_download_error(i18n, exc), show_alert=True)
+            return
         except UnsupportedURLError as exc:
             # Our validator again (RequestDownloadUseCase re-validates).
             await callback.answer(i18n.get("error-bad-url", reason=str(exc)[:150]), show_alert=True)
@@ -361,8 +420,7 @@ async def handle_confirm_download(
         "flow_download_confirmed",
         request_id=str(request.id),
         telegram_id=telegram_id,
-        format_kind=format_kind.value,
-        quality_kind=quality_kind.value,
+        spec=repr(spec),
     )
 
     if isinstance(callback.message, Message):

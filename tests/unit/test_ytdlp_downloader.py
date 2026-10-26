@@ -22,15 +22,20 @@ on progress reporting). New tests below cover ``_build_download_progress``
 and the progress_callback → progress_sink wiring itself, capturing actual
 arguments rather than asserting a bare mock was called (lesson 11A.1).
 
-Day 11C stage 1: ``_run_download_in_process`` gained a seventh positional
-argument (``max_height``) — the same stand-ins updated once more, plus a
-dedicated argument-capture test that the value actually reaches it
-(lesson 11A.1: a plumbing parameter nobody asserts on is a parameter that
-can silently stop being forwarded).
+Day 11C (v2): ``_run_download_in_process`` takes the spec as two
+primitives (``format_kind_value``, ``video_tier_value``) BEFORE
+``progress_sink`` — the stand-ins mirror that order. A stand-in with the
+old order silently receives the tier string as its sink and the
+progress drain then waits forever, so keep them in step. Argument
+capture pins that the primitives actually reach the runner (lesson
+11A.1). Every stand-in is installed through ``_install_runner``, typed
+against ``RunDownloadInProcess``, so mypy catches that drift (this file
+is type-checked in the gate).
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -44,12 +49,28 @@ from src.domain.exceptions import (
 )
 from src.domain.value_objects.download_options import DownloadOptions
 from src.domain.value_objects.download_progress import DownloadProgress
+from src.domain.value_objects.download_spec import (
+    AudioSpec,
+    DownloadSpec,
+    VideoSpec,
+    VideoTier,
+    spec_from_parts,
+    spec_kind,
+)
 from src.domain.value_objects.enums import MediaType
 from src.domain.value_objects.format_kind import FormatKind
 from src.domain.value_objects.progress_phase import ProgressPhase
-from src.domain.value_objects.quality_kind import QualityKind
 from src.infrastructure.downloader import ytdlp_downloader
-from src.infrastructure.downloader.ytdlp_downloader import YtDlpDownloader
+from src.infrastructure.downloader.ytdlp_downloader import (
+    RunDownloadInProcess,
+    YtDlpDownloader,
+)
+
+_Sink = Callable[[dict[str, Any] | None], None] | None
+
+
+def _install_runner(monkeypatch: pytest.MonkeyPatch, runner: RunDownloadInProcess) -> None:
+    monkeypatch.setattr(ytdlp_downloader, "_run_download_in_process", runner)
 
 
 @pytest.mark.asyncio
@@ -131,21 +152,23 @@ def test_guess_media_type_unknown() -> None:
 
 
 @pytest.mark.asyncio
-async def test_download_returns_path_on_success(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+async def test_download_returns_path_on_success(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     expected_path = str(tmp_path / "video.mp4")
 
     def _fake_run(
-        url,
-        output_dir,
-        max_filesize_bytes,
-        timeout_seconds,
-        format_kind_value,
-        progress_sink,
-        max_height,
-    ):
+        url: str,
+        output_dir: str,
+        max_filesize_bytes: int | None,
+        timeout_seconds: int,
+        format_kind_value: str,
+        video_tier_value: str | None,
+        progress_sink: _Sink = None,
+    ) -> str:
         return expected_path
 
-    monkeypatch.setattr(ytdlp_downloader, "_run_download_in_process", _fake_run)
+    _install_runner(monkeypatch, _fake_run)
 
     downloader = YtDlpDownloader()
     options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60)
@@ -156,7 +179,7 @@ async def test_download_returns_path_on_success(monkeypatch: pytest.MonkeyPatch,
 
 @pytest.mark.asyncio
 async def test_download_maps_timeout_to_timeout_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     def _raise_timeout(
         url: str,
@@ -164,12 +187,12 @@ async def test_download_maps_timeout_to_timeout_error(
         max_filesize_bytes: int | None,
         timeout_seconds: int,
         format_kind_value: str,
-        progress_sink: object,
-        max_height: int,
+        video_tier_value: str | None,
+        progress_sink: _Sink = None,
     ) -> str:
         raise ytdlp_downloader._DownloadTimeoutError("превысило лимит 1 секунд")
 
-    monkeypatch.setattr(ytdlp_downloader, "_run_download_in_process", _raise_timeout)
+    _install_runner(monkeypatch, _raise_timeout)
 
     downloader = YtDlpDownloader()
     options = DownloadOptions(output_dir=tmp_path, timeout_seconds=1)
@@ -184,7 +207,7 @@ async def test_download_maps_timeout_to_timeout_error(
 
 @pytest.mark.asyncio
 async def test_download_maps_process_error_to_extraction_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     def _raise_process_error(
         url: str,
@@ -192,8 +215,8 @@ async def test_download_maps_process_error_to_extraction_error(
         max_filesize_bytes: int | None,
         timeout_seconds: int,
         format_kind_value: str,
-        progress_sink: object,
-        max_height: int,
+        video_tier_value: str | None,
+        progress_sink: _Sink = None,
     ) -> str:
         # This diagnostic-rich message must NOT leak into the raised
         # exception's text (it may contain container paths, signed CDN
@@ -202,7 +225,7 @@ async def test_download_maps_process_error_to_extraction_error(
             "dir_contents=[...] info_summary={'url': 'https://signed.example/secret'}"
         )
 
-    monkeypatch.setattr(ytdlp_downloader, "_run_download_in_process", _raise_process_error)
+    _install_runner(monkeypatch, _raise_process_error)
 
     downloader = YtDlpDownloader()
     options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60)
@@ -218,7 +241,7 @@ async def test_download_maps_process_error_to_extraction_error(
 
 @pytest.mark.asyncio
 async def test_download_maps_file_too_large_to_categorized_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     def _raise_too_large(
         url: str,
@@ -226,14 +249,14 @@ async def test_download_maps_file_too_large_to_categorized_error(
         max_filesize_bytes: int | None,
         timeout_seconds: int,
         format_kind_value: str,
-        progress_sink: object,
-        max_height: int,
+        video_tier_value: str | None,
+        progress_sink: _Sink = None,
     ) -> str:
         # Day 10: the internal error carries the numbers, not a pre-baked
         # (hardcoded-language) sentence.
         raise ytdlp_downloader._FileTooLargeError(estimated_mb=178, limit_mb=50)
 
-    monkeypatch.setattr(ytdlp_downloader, "_run_download_in_process", _raise_too_large)
+    _install_runner(monkeypatch, _raise_too_large)
 
     downloader = YtDlpDownloader()
     options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60)
@@ -328,7 +351,7 @@ def test_translate_progress_status_other_statuses_emit_nothing() -> None:
 
 @pytest.mark.asyncio
 async def test_download_wires_progress_callback_through_to_domain(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Captures the actual `progress_sink` download() builds and hands to
     `_run_download_in_process`, invokes it as production code would (from
@@ -354,15 +377,15 @@ async def test_download_wires_progress_callback_through_to_domain(
         max_filesize_bytes: int | None,
         timeout_seconds: int,
         format_kind_value: str,
-        progress_sink,
-        max_height: int,
+        video_tier_value: str | None,
+        progress_sink: _Sink = None,
     ) -> str:
         assert progress_sink is not None
         progress_sink({"downloaded_bytes": 10, "total_bytes": 100, "speed": 5.0, "eta": 9})
         progress_sink(None)
         return expected_path
 
-    monkeypatch.setattr(ytdlp_downloader, "_run_download_in_process", _fake_run_download_in_process)
+    _install_runner(monkeypatch, _fake_run_download_in_process)
 
     downloader = YtDlpDownloader()
     options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60)
@@ -384,7 +407,7 @@ async def test_download_wires_progress_callback_through_to_domain(
 
 @pytest.mark.asyncio
 async def test_download_without_progress_callback_passes_none_sink(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     expected_path = str(tmp_path / "video.mp4")
     captured: dict[str, Any] = {}
@@ -395,13 +418,13 @@ async def test_download_without_progress_callback_passes_none_sink(
         max_filesize_bytes: int | None,
         timeout_seconds: int,
         format_kind_value: str,
-        progress_sink,
-        max_height: int,
+        video_tier_value: str | None,
+        progress_sink: _Sink = None,
     ) -> str:
         captured["progress_sink"] = progress_sink
         return expected_path
 
-    monkeypatch.setattr(ytdlp_downloader, "_run_download_in_process", _fake_run_download_in_process)
+    _install_runner(monkeypatch, _fake_run_download_in_process)
 
     downloader = YtDlpDownloader()
     options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60)
@@ -410,135 +433,99 @@ async def test_download_without_progress_callback_passes_none_sink(
     assert captured["progress_sink"] is None
 
 
-# --- Day 11C stage 1: quality plumbing ---------------------------------------
+# --- Day 11C (v2): the spec crosses the spawn boundary as primitives -------
 
 
-@pytest.mark.asyncio
-async def test_download_forwards_default_max_height_to_child_runner(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:
-    """`max_height` is a pass-through parameter with a default at every
-    hop, which is exactly the kind of plumbing that can quietly stop
-    being forwarded without any test failing (lesson 11A.1). So capture
-    the actual argument `download()` passes, not just that it ran.
-
-    Stage 1 has no user-facing choice yet — the value is the module
-    default. Stage 2 changes only where it comes from.
-    """
-    expected_path = str(tmp_path / "video.mp4")
-    captured: dict[str, Any] = {}
-
+def _capturing_runner(captured: dict[str, Any], result: str) -> Any:
     def _fake_run_download_in_process(
         url: str,
         output_dir: str,
         max_filesize_bytes: int | None,
         timeout_seconds: int,
         format_kind_value: str,
-        progress_sink,
-        max_height: int,
+        video_tier_value: str | None,
+        progress_sink: _Sink = None,
     ) -> str:
-        captured["max_height"] = max_height
-        return expected_path
+        captured["format_kind_value"] = format_kind_value
+        captured["video_tier_value"] = video_tier_value
+        return result
 
-    monkeypatch.setattr(ytdlp_downloader, "_run_download_in_process", _fake_run_download_in_process)
-
-    downloader = YtDlpDownloader()
-    options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60)
-    await downloader.download("https://example.com/video", options)
-
-    assert captured["max_height"] == 720
-    assert captured["max_height"] == ytdlp_downloader._DEFAULT_MAX_HEIGHT
+    return _fake_run_download_in_process
 
 
 @pytest.mark.parametrize(
-    ("quality", "expected_height"),
-    [(QualityKind.HD_720, 720), (QualityKind.HD_1080, 1080)],
+    ("spec", "kind", "tier"),
+    [
+        (VideoSpec(VideoTier.P720), "video", "p720"),
+        (VideoSpec(VideoTier.P1080), "video", "p1080"),
+        (VideoSpec(VideoTier.BEST), "video", "best"),
+        (AudioSpec(), "audio", None),
+    ],
 )
 @pytest.mark.asyncio
-async def test_download_forwards_chosen_quality_height_to_child_runner(
-    monkeypatch: pytest.MonkeyPatch, tmp_path, quality, expected_height
+async def test_download_forwards_spec_primitives_to_child_runner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    spec: DownloadSpec,
+    kind: str,
+    tier: str | None,
 ) -> None:
-    """Day 11C stage 3: the height crossing into the child process must
-    come from the tier on `options`, not from the module default.
-
-    Both tiers are asserted, and against DIFFERENT numbers: a test that
-    only checked 720 would pass identically if `download()` still ignored
-    `options` and forwarded `_DEFAULT_MAX_HEIGHT`. 1080 is what makes it
-    able to fail — that is the whole lesson of 11A.1.
+    """The READ link at the process boundary (lesson 11A.1): what crosses
+    into the child must come from `options.spec`, for every shape — a
+    test that only checked the 720p default would pass against a
+    downloader that ignored `options` entirely.
     """
-    expected_path = str(tmp_path / "video.mp4")
     captured: dict[str, Any] = {}
+    _install_runner(monkeypatch, _capturing_runner(captured, str(tmp_path / "out")))
 
-    def _fake_run_download_in_process(
-        url: str,
-        output_dir: str,
-        max_filesize_bytes: int | None,
-        timeout_seconds: int,
-        format_kind_value: str,
-        progress_sink,
-        max_height: int,
-    ) -> str:
-        captured["max_height"] = max_height
-        return expected_path
+    options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60, spec=spec)
+    await YtDlpDownloader().download("https://example.com/video", options)
 
-    monkeypatch.setattr(ytdlp_downloader, "_run_download_in_process", _fake_run_download_in_process)
+    assert captured == {"format_kind_value": kind, "video_tier_value": tier}
+    # Plain str/None (pickle-safe under spawn), never the dataclass/enum.
+    assert type(captured["format_kind_value"]) is str
+    assert captured["video_tier_value"] is None or type(captured["video_tier_value"]) is str
 
-    downloader = YtDlpDownloader()
-    options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60, quality_kind=quality)
-    await downloader.download("https://example.com/video", options)
 
-    assert captured["max_height"] == expected_height
-    # Crosses the process boundary as a plain int (pickle-safe), never
-    # the enum itself — same convention as format_kind_value.
-    assert type(captured["max_height"]) is int
+@pytest.mark.parametrize(
+    "spec",
+    [VideoSpec(VideoTier.P720), VideoSpec(VideoTier.P1080), VideoSpec(VideoTier.BEST), AudioSpec()],
+)
+def test_child_rebuilds_the_same_ydl_opts_from_the_primitives(spec: DownloadSpec) -> None:
+    """Parent→child round trip: the primitives the parent sends rebuild a
+    spec that yields byte-identical selection options in the child."""
+    rebuilt = spec_from_parts(spec_kind(spec).value, ytdlp_downloader._video_tier_value(spec))
+    assert rebuilt == spec
+
+    def _hook(_: str) -> None:  # pragma: no cover - never invoked
+        pass
+
+    keys = ("format", "format_sort", "merge_output_format", "postprocessors")
+    original = ytdlp_downloader._build_download_ydl_opts("/o", None, spec, _hook)
+    child = ytdlp_downloader._build_download_ydl_opts("/o", None, rebuilt, _hook)
+    assert {k: original.get(k) for k in keys} == {k: child.get(k) for k in keys}
 
 
 @pytest.mark.asyncio
-async def test_audio_download_still_forwards_a_height_but_ignores_it(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
+async def test_preview_maps_extractor_key_and_compatible_short_side(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Quality is meaningless for mp3. The plumbing stays uniform (the
-    argument is always passed), and the audio branch of
-    `_build_download_ydl_opts` is what ignores it — pinned in
-    test_download_ydl_opts.py. Here: an audio download with HD_1080 must
-    not blow up or change the forwarded contract.
-    """
-    expected_path = str(tmp_path / "audio.mp3")
-    captured: dict[str, Any] = {}
+    info = {
+        "title": "t",
+        "extractor_key": "TikTok",
+        "vcodec": "h264",
+        "formats": [
+            {"vcodec": "h264", "acodec": "aac", "width": 720, "height": 1280},
+            {"vcodec": "h265", "acodec": "none", "width": 1080, "height": 1920},
+        ],
+    }
+    monkeypatch.setattr(ytdlp_downloader, "_extract_info_sync", lambda url: info)
 
-    def _fake_run_download_in_process(
-        url: str,
-        output_dir: str,
-        max_filesize_bytes: int | None,
-        timeout_seconds: int,
-        format_kind_value: str,
-        progress_sink,
-        max_height: int,
-    ) -> str:
-        captured["format_kind_value"] = format_kind_value
-        captured["max_height"] = max_height
-        return expected_path
+    preview = await YtDlpDownloader().get_preview("https://tiktok.com/@a/video/1")
 
-    monkeypatch.setattr(ytdlp_downloader, "_run_download_in_process", _fake_run_download_in_process)
-
-    downloader = YtDlpDownloader()
-    options = DownloadOptions(
-        output_dir=tmp_path,
-        timeout_seconds=60,
-        format_kind=FormatKind.AUDIO,
-        quality_kind=QualityKind.HD_1080,
-    )
-    await downloader.download("https://example.com/audio", options)
-
-    assert captured["format_kind_value"] == "audio"
-    assert captured["max_height"] == 1080
-
-
-def test_default_max_height_derives_from_the_domain_enum() -> None:
-    """Guards against a second tier→height mapping reappearing in
-    infrastructure: the module constant must BE the enum's value, not a
-    literal that happens to match it today."""
-    assert QualityKind.HD_720.max_height == ytdlp_downloader._DEFAULT_MAX_HEIGHT
+    assert preview.extractor_key == "tiktok"
+    # 1080 exists only in h265; the compatible (h264) top is 720.
+    assert preview.max_compatible_short_side == 720
 
 
 def test_preview_opts_pin_no_player_client() -> None:

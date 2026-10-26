@@ -28,7 +28,7 @@ The interesting part of this project is not the download itself. It is everythin
 
 **Audience.** Telegram users who want video or MP3 from a link, with a two-step confirmation flow and localized interface (ru/en).
 
-**Status.** Working end to end: preview → format choice → quality choice → download → delivery, with real-time progress and categorized, localized error messages. 343 tests with 99% coverage of the domain and application layers (CI gate: 90%), `ruff` and `mypy --strict` clean.
+**Status.** Working end to end: preview → format choice → quality choice → download → delivery, with real-time progress and categorized, localized error messages. 475 tests with 98% coverage of the domain and application layers (CI gate: 90%), `ruff` and `mypy --strict` clean.
 
 ---
 
@@ -36,7 +36,8 @@ The interesting part of this project is not the download itself. It is everythin
 
 - **Two-phase download flow.** `extract_info(download=False)` produces a preview card (title, duration, thumbnail) before a single byte is downloaded — the user confirms, and only then does a worker job get queued.
 - **Format selection.** Video (MP4) or audio (MP3 via `FFmpegExtractAudio`), chosen with inline buttons under the preview.
-- **Quality selection.** Two-step keyboard: Video → 720p / 1080p, encoded in the callback payload and persisted as a domain property.
+- **Quality selection.** Quality is the video's short side, so vertical video is not downgraded. Video → 720p / 1080p (or 720p / the source's best between the two) — the step appears only when there is a choice; otherwise the video button downloads the best inline-playable stream directly. Persisted as a `DownloadSpec` (see `docs/adr/0001-download-spec-sum-type.md`).
+- **Per-source format kill-switch.** `DISABLED_FORMATS` hides a format on the preview card and refuses it in the use case, for one extractor only (see `docs/adr/0002-format-policy-kill-switch.md`).
 - **Large file delivery.** Optional self-hosted Bot API server lifts the upload limit from 50 MB to 2000 MB.
 - **Real-time progress.** Percentage, speed and ETA pushed from the download subprocess to the chat message, with throttling to stay within Telegram rate limits.
 - **Categorized errors.** `yt-dlp` failures are classified into seven domain exception types (private, geo-blocked, age-restricted, unavailable, unsupported media, timeout, too large). The user sees a short localized sentence; the raw diagnostic goes to the structured log only.
@@ -123,11 +124,12 @@ sequenceDiagram
     User->>Bot: URL
     Bot->>Bot: allowlist + rate limit
     Bot->>Bot: extract_info(download=False)<br/>in a thread executor
-    Bot->>Redis: SET token → URL (TTL)
+    Bot->>Redis: SET token → PreviewContext (URL, extractor, short side; TTL)
     Bot-->>User: preview card + [Video] [MP3]
     User->>Bot: tap Video → 1080p
     Bot->>Redis: GETDEL token (first tap wins)
-    Bot->>DB: INSERT DownloadRequest(format, quality)
+    Bot->>Bot: FormatPolicy.is_allowed(extractor, spec)
+    Bot->>DB: INSERT DownloadRequest(spec)
     Bot->>Redis: enqueue job(request_id)
     Redis->>Worker: job
     Worker->>DB: load DownloadRequest by id
@@ -152,9 +154,9 @@ Every one of these has exactly one infrastructure implementation today and could
 ### Data flow of one download
 
 1. User sends a URL. The handler validates it against the domain allowlist and checks the Redis rate limiter.
-2. `PreviewDownloadUseCase` calls `extract_info(download=False)`; the URL is stored in Redis under a short-lived token, and a preview card is rendered with format buttons.
+2. `PreviewDownloadUseCase` calls `extract_info(download=False)`; the URL, the extractor and the video's short side are stored in Redis under a short-lived token, and a preview card is rendered with the buttons `FormatPolicy` offers for that source.
 3. The user picks video/MP3 and, for video, a quality tier. The callback payload carries the token plus the choice.
-4. `RequestDownloadUseCase` persists a `DownloadRequest` entity (with `format_kind` and `quality_kind`) and enqueues a job carrying only the request id plus the message coordinates for progress rendering.
+4. `RequestDownloadUseCase` checks the spec against `FormatPolicy`, then persists a `DownloadRequest` entity (with its `DownloadSpec` as `format_kind` + `video_tier`) and enqueues a job carrying only the request id plus the message coordinates for progress rendering.
 5. The worker's `ProcessDownloadUseCase` reloads the entity from the database, builds `DownloadOptions`, and calls the downloader.
 6. `YtDlpDownloader` spawns a child process. Progress hooks push updates through an inter-process queue; the parent drains them into Redis pub/sub. A timeout triggers `terminate()`.
 7. On success the file path is resolved from `post_hooks` (the only reliable source after an FFmpeg merge or transcode), delivered through the notifier, and cleaned up.
@@ -168,8 +170,8 @@ umd/
 ├── src/
 │   ├── domain/                  # No outbound dependencies
 │   │   ├── entities/            # User, DownloadRequest
-│   │   ├── value_objects/       # FormatKind, QualityKind, MediaType,
-│   │   │                        #   DownloadOptions, DownloadProgress,
+│   │   ├── value_objects/       # DownloadSpec/VideoTier, FormatKind, MediaType,
+│   │   │                        #   PreviewContext, DownloadOptions, DownloadProgress,
 │   │   │                        #   MediaPreview, url_validation
 │   │   ├── interfaces/          # All ports
 │   │   └── exceptions.py        # Domain errors, each carrying an error_key
@@ -195,7 +197,7 @@ umd/
 │   └── main.py                  # Bot entrypoint, builds and injects resources
 ├── locales/{ru,en}/messages.ftl # Every user-facing string
 ├── infra/
-│   ├── alembic/versions/        # 0001_initial … 0004_quality_kind
+│   ├── alembic/versions/        # 0001_initial … 0005_video_tier
 │   └── docker/                  # bot.Dockerfile, entrypoint.sh
 ├── tests/
 │   ├── unit/                    # Domain, application, presentation logic,
@@ -277,6 +279,8 @@ The full stack still needs Docker for Postgres and Redis; the local environment 
 | `DEFAULT_LOCALE` | No | `en` | Fallback when the user has no override and no recognizable `language_code` |
 | `ADMIN_TELEGRAM_IDS` | No | `[]` | JSON list of Telegram user ids allowed to run `/health`, `/worker_ping`, `/worker_status`. Empty list denies everyone |
 | `ALLOWED_DOMAINS` | No | YouTube, TikTok, Instagram, Twitter/X, VK | JSON list; suffix match per label. Empty list disables the allowlist (development only) |
+| `BLOCKED_DOMAINS` | No | `["music.youtube.com"]` | JSON list; exceptions to the allowlist, same suffix match, checked first |
+| `DISABLED_FORMATS` | No | `{}` | JSON object, lowercased extractor key → list of `video` / `audio`, e.g. `{"youtube": ["audio"]}`. Hidden on the card and refused on request; needs a bot restart |
 | `PREVIEW_CONTEXT_TTL_SECONDS` | No | `600` | How long a preview's confirm button stays actionable |
 | `RATE_LIMIT_DOWNLOADS_PER_HOUR` | No | `10` | Per Telegram user |
 | `RATE_LIMIT_PREVIEWS_PER_MINUTE` | No | `5` | Per Telegram user |
@@ -292,7 +296,7 @@ Secrets are read from `.env`, wrapped in `SecretStr`, and never logged. `.env` i
 
 ## Database
 
-Four Alembic migrations define the current schema:
+Five Alembic migrations define the current schema:
 
 | Revision | Change |
 |---|---|
@@ -300,6 +304,7 @@ Four Alembic migrations define the current schema:
 | `0002_user_language` | `users.language` (nullable) |
 | `0003_format_kind` | `download_requests.format_kind`, `NOT NULL`, server default `video` |
 | `0004_quality_kind` | `download_requests.quality_kind`, `NOT NULL`, server default `hd_720` |
+| `0005_video_tier` | `download_requests.video_tier` (nullable; set iff video, CHECK), drops `quality_kind` and the `format_kind` default. Lossy downgrade (`best` → `hd_720`); deploy: stop bot + worker → upgrade → start |
 
 ```bash
 docker compose exec bot alembic upgrade head
@@ -326,7 +331,7 @@ make test-cov          # with the coverage gate, as CI runs it
 
 **Unit tests** cover use cases, the URL allowlist and validator, the `yt-dlp` options builder (per format and per quality branch), the error classifier against a corpus of real `yt-dlp` message strings, the localizer, callback encoding/decoding including byte budget and legacy payloads, the progress throttler, the rate limiter, message formatting under i18n, and the subprocess kill mechanism.
 
-**Integration tests** exercise the SQLAlchemy repositories against SQLite through `aiosqlite`, including the language and quality round trips, and the composition root's transaction boundary (commit on success, rollback on exception).
+**Integration tests** exercise the SQLAlchemy repositories against SQLite through `aiosqlite`, including the language and download spec round trips, a migration test against real PostgreSQL (separate CI job), and the composition root's transaction boundary (commit on success, rollback on exception).
 
 **Architecture tests** enforce the dependency rule on every run: domain imports only the standard library, application only domain, and presentation never imports infrastructure. A self-test proves the scanner catches every import form, so the check cannot pass vacuously.
 
@@ -384,11 +389,11 @@ The domain layer carries no strings. Domain exceptions carry a semantic `error_k
 
 ## Engineering Decisions
 
-**Process isolation over thread isolation for `yt-dlp`.** A hung download inside a thread cannot be killed; the event loop is hostage to it. Each download therefore runs in its own `multiprocessing.Process`, terminated on timeout. The cost is that the format choice must be pickled across the boundary as a plain string and reconstructed as an enum in the child.
+**Process isolation over thread isolation for `yt-dlp`.** A hung download inside a thread cannot be killed; the event loop is hostage to it. Each download therefore runs in its own `multiprocessing.Process`, terminated on timeout. The cost is that the download spec must cross the boundary as plain strings (`format_kind`, `video_tier`) and be rebuilt in the child.
 
 **Local Bot API server instead of S3 links or quality downgrading.** Both alternatives change the product — one moves the file out of Telegram, the other silently degrades what the user asked for. A self-hosted `telegram-bot-api` container sharing a Docker volume with the worker keeps delivery inside the chat, at the price of one more service and a `my.telegram.org` registration. The shared volume path must match exactly on both sides: in local mode the server reads the file from disk itself.
 
-**`FormatKind` and `QualityKind` are persisted domain properties; message coordinates are not.** The worker reconstructs the entire request from the database using only its id, so anything describing *what to download* must be persisted. By contrast, the chat and message ids that say *where to draw progress* are transport details and travel in the job payload — putting them in the domain would let Telegram leak across the dependency rule.
+**The `DownloadSpec` is a persisted domain property; message coordinates are not.** The worker reconstructs the entire request from the database using only its id, so anything describing *what to download* must be persisted. By contrast, the chat and message ids that say *where to draw progress* are transport details and travel in the job payload — putting them in the domain would let Telegram leak across the dependency rule.
 
 **`FormatKind` is a separate value object from `MediaType`.** `MediaType` describes what the source *is*; `FormatKind` describes what the user *asked for*. One video can be requested as MP4 or as MP3 — different intents against the same medium, therefore different concepts.
 

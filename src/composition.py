@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from src.application.policies.format_policy import FormatPolicy
 from src.application.use_cases.preview_download import PreviewDownloadUseCase
 from src.application.use_cases.register_user import RegisterUserUseCase
 from src.application.use_cases.request_download import RequestDownloadUseCase
@@ -39,10 +40,12 @@ class SqlAlchemyUseCaseProvider(UseCaseProvider):
         session_factory: async_sessionmaker[AsyncSession],
         task_queue: TaskQueue,
         downloader: DownloaderPort,
+        format_policy: FormatPolicy,
     ) -> None:
         self._session_factory = session_factory
         self._task_queue = task_queue
         self._downloader = downloader
+        self._format_policy = format_policy
 
     @asynccontextmanager
     async def register_user(self) -> AsyncIterator[RegisterUserUseCase]:
@@ -56,6 +59,7 @@ class SqlAlchemyUseCaseProvider(UseCaseProvider):
                 user_repository=SqlAlchemyUserRepository(session),
                 download_request_repository=SqlAlchemyDownloadRequestRepository(session),
                 task_queue=self._task_queue,
+                format_policy=self._format_policy,
             )
 
     @asynccontextmanager

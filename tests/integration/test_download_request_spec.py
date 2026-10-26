@@ -1,27 +1,36 @@
-"""Day 11C stage 2: quality_kind survives the trip through the repository.
+"""Day 11C: the request's DownloadSpec survives the trip through the
+repository (stored as ``format_kind`` + ``video_tier``).
 
 Against in-memory SQLite (same caveat as test_repositories.py: this
 checks ORM mapping + repository logic, not Postgres server_default
 semantics — that is verified by the live `alembic upgrade head` run).
 
 The second test is the guard that matters: ``update`` is called on every
-state transition and must not silently reset quality_kind, which is the
+state transition and must not silently reset the spec, which is the
 shape of bug 11A.1 (a field persisted on create but lost downstream).
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from uuid import uuid4
 
 import pytest
 import pytest_asyncio
 import structlog
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from src.domain.entities.download_request import DownloadRequest
 from src.domain.entities.user import User
-from src.domain.value_objects.quality_kind import QualityKind
+from src.domain.value_objects.download_spec import (
+    DEFAULT_DOWNLOAD_SPEC,
+    AudioSpec,
+    DownloadSpec,
+    VideoSpec,
+    VideoTier,
+)
 from src.infrastructure.database.engine import Base
 from src.infrastructure.database.repositories.download_request_repository import (
     SqlAlchemyDownloadRequestRepository,
@@ -48,25 +57,62 @@ async def _make_user(session: AsyncSession) -> User:
     return user
 
 
-@pytest.mark.parametrize("quality", [QualityKind.HD_720, QualityKind.HD_1080])
+_ALL_SPECS = [
+    VideoSpec(VideoTier.P720),
+    VideoSpec(VideoTier.P1080),
+    VideoSpec(VideoTier.BEST),
+    AudioSpec(),
+]
+
+
+@pytest.mark.parametrize("spec", _ALL_SPECS)
 @pytest.mark.asyncio
-async def test_quality_kind_roundtrips(session: AsyncSession, quality: QualityKind) -> None:
+async def test_spec_roundtrips(session: AsyncSession, spec: DownloadSpec) -> None:
     user = await _make_user(session)
     repo = SqlAlchemyDownloadRequestRepository(session)
 
-    request = DownloadRequest.create(
-        user_id=user.id, source_url="https://example.com/v", quality_kind=quality
-    )
+    request = DownloadRequest.create(user_id=user.id, source_url="https://example.com/v", spec=spec)
     await repo.create(request)
     await session.commit()
+    session.expire_all()
 
     fetched = await repo.get_by_id(request.id)
     assert fetched is not None
-    assert fetched.quality_kind is quality
+    assert fetched.spec == spec
+
+
+@pytest.mark.parametrize(
+    ("spec", "format_kind", "video_tier"),
+    [
+        (VideoSpec(VideoTier.P720), "video", "p720"),
+        (VideoSpec(VideoTier.P1080), "video", "p1080"),
+        (VideoSpec(VideoTier.BEST), "video", "best"),
+        (AudioSpec(), "audio", None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_spec_is_stored_as_explicit_columns(
+    session: AsyncSession, spec: DownloadSpec, format_kind: str, video_tier: str | None
+) -> None:
+    # The raw columns are the contract with migration 0005 and its CHECK;
+    # asserting only the roundtrip would pass with any private encoding.
+    user = await _make_user(session)
+    repo = SqlAlchemyDownloadRequestRepository(session)
+    request = DownloadRequest.create(user_id=user.id, source_url="https://example.com/v", spec=spec)
+    await repo.create(request)
+    await session.commit()
+
+    row = (
+        await session.execute(
+            text("select format_kind, video_tier from download_requests where id = :id"),
+            {"id": request.id.hex},
+        )
+    ).one()
+    assert tuple(row) == (format_kind, video_tier)
 
 
 @pytest.mark.asyncio
-async def test_default_quality_is_persisted(session: AsyncSession) -> None:
+async def test_default_spec_is_persisted(session: AsyncSession) -> None:
     user = await _make_user(session)
     repo = SqlAlchemyDownloadRequestRepository(session)
 
@@ -76,19 +122,16 @@ async def test_default_quality_is_persisted(session: AsyncSession) -> None:
 
     fetched = await repo.get_by_id(request.id)
     assert fetched is not None
-    assert fetched.quality_kind is QualityKind.HD_720
+    assert fetched.spec == DEFAULT_DOWNLOAD_SPEC
 
 
+@pytest.mark.parametrize("spec", [VideoSpec(VideoTier.P1080), AudioSpec()])
 @pytest.mark.asyncio
-async def test_update_does_not_clobber_quality_kind(session: AsyncSession) -> None:
+async def test_update_does_not_clobber_spec(session: AsyncSession, spec: DownloadSpec) -> None:
     user = await _make_user(session)
     repo = SqlAlchemyDownloadRequestRepository(session)
 
-    request = DownloadRequest.create(
-        user_id=user.id,
-        source_url="https://example.com/v",
-        quality_kind=QualityKind.HD_1080,
-    )
+    request = DownloadRequest.create(user_id=user.id, source_url="https://example.com/v", spec=spec)
     await repo.create(request)
     await session.commit()
 
@@ -97,10 +140,32 @@ async def test_update_does_not_clobber_quality_kind(session: AsyncSession) -> No
     request.mark_done()
     await repo.update(request)
     await session.commit()
+    session.expire_all()
 
     fetched = await repo.get_by_id(request.id)
     assert fetched is not None
-    assert fetched.quality_kind is QualityKind.HD_1080
+    assert fetched.spec == spec
+
+
+@pytest.mark.parametrize(("format_kind", "video_tier"), [("video", None), ("audio", "p720")])
+@pytest.mark.asyncio
+async def test_check_constraint_rejects_mismatched_pair(
+    session: AsyncSession, format_kind: str, video_tier: str | None
+) -> None:
+    # The ORM model carries the same CHECK as migration 0005, so even
+    # SQLite enforces it; the Postgres side is covered by the migration
+    # test.
+    user = await _make_user(session)
+    await session.commit()
+    with pytest.raises(IntegrityError):
+        await session.execute(
+            text(
+                "insert into download_requests "
+                "(id, user_id, source_url, media_type, status, format_kind, video_tier) "
+                "values (:id, :uid, 'https://x.y', 'video', 'pending', :fk, :vt)"
+            ),
+            {"id": uuid4().hex, "uid": user.id.hex, "fk": format_kind, "vt": video_tier},
+        )
 
 
 @pytest.mark.asyncio
@@ -124,7 +189,7 @@ async def test_listing_skips_a_corrupted_row_instead_of_dying(session: AsyncSess
     await session.commit()
 
     # Corrupt one row the way only a foreign writer or a rollback could:
-    # the column is a plain varchar with no CHECK constraint.
+    # status is a plain varchar with no CHECK constraint.
     await session.execute(
         text("update download_requests set status = 'garbage' where id = :id"),
         {"id": bad.id.hex},

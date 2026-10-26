@@ -5,13 +5,12 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from src.domain.value_objects.enums import DownloadStatus, MediaType
 from src.domain.value_objects.format_kind import FormatKind
-from src.domain.value_objects.quality_kind import QualityKind
 from src.infrastructure.database.engine import Base
 
 
@@ -46,24 +45,24 @@ class DownloadRequestModel(Base):
     status: Mapped[DownloadStatus] = mapped_column(
         String(20), default=DownloadStatus.PENDING, server_default=DownloadStatus.PENDING.value
     )
-    # Day 11A: what the user asked for (video vs mp3). server_default =
-    # "video" so any row created before this migration reads back as a
-    # normal video download — the pre-Day-11 behaviour, unchanged.
-    format_kind: Mapped[FormatKind] = mapped_column(
-        String(20), default=FormatKind.VIDEO, server_default=FormatKind.VIDEO.value
-    )
-    # Day 11C: requested video quality tier. NOT NULL with a
-    # server_default of "hd_720" so pre-migration rows backfill to the
-    # Day 11C stage 1 default (720p) — the behaviour they actually ran
-    # with. Audio rows carry this value and never read it. String(16)
-    # rather than the tightest fit: "hd_1080" needs 7, and a wider tier
-    # name later shouldn't cost a migration.
-    quality_kind: Mapped[QualityKind] = mapped_column(
-        String(16), default=QualityKind.HD_720, server_default=QualityKind.HD_720.value
-    )
+    # Day 11A: what the user asked for (video vs mp3). Its server_default
+    # ('video', which backfilled pre-11A rows) is dropped in 0005: with the
+    # CHECK below, a default on one half of the (format_kind, video_tier)
+    # pair could never produce a valid row — both are app-written.
+    format_kind: Mapped[FormatKind] = mapped_column(String(20))
+    # Day 11C (v2): VideoTier of a VideoSpec; NULL exactly for audio rows.
+    # Together with format_kind it encodes the request's DownloadSpec —
+    # the CHECK below makes the pair unable to disagree (migration 0005).
+    video_tier: Mapped[str | None] = mapped_column(String(10), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped[UserModel] = relationship(back_populates="download_requests")
 
-    __table_args__ = (Index("ix_download_requests_user_id", "user_id"),)
+    __table_args__ = (
+        Index("ix_download_requests_user_id", "user_id"),
+        CheckConstraint(
+            "(format_kind = 'video') = (video_tier IS NOT NULL)",
+            name="ck_download_requests_video_tier_kind",
+        ),
+    )

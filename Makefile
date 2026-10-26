@@ -24,7 +24,7 @@ install: ## Install the project with dev dependencies (editable)
 lint: ## Run ruff (lint + format check) and mypy --strict
 	$(PYTHON) -m ruff check src tests
 	$(PYTHON) -m ruff format --check src tests
-	$(PYTHON) -m mypy --strict src
+	$(PYTHON) -m mypy --strict src tests/unit/test_ytdlp_downloader.py
 
 format: ## Auto-format and apply safe lint fixes
 	$(PYTHON) -m ruff format src tests

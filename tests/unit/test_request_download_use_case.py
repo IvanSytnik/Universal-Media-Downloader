@@ -6,10 +6,19 @@ from uuid import UUID
 
 import pytest
 
+from src.application.policies.format_policy import FormatPolicy
 from src.application.use_cases.request_download import RequestDownloadUseCase
 from src.domain.entities.download_request import DownloadRequest
 from src.domain.entities.user import User
-from src.domain.exceptions import UnsupportedURLError
+from src.domain.exceptions import FormatNotAllowedError, UnsupportedURLError
+from src.domain.value_objects.download_spec import (
+    DEFAULT_DOWNLOAD_SPEC,
+    AudioSpec,
+    DownloadSpec,
+    VideoSpec,
+    VideoTier,
+)
+from src.domain.value_objects.format_kind import FormatKind
 
 
 class FakeUserRepository:
@@ -71,9 +80,14 @@ async def test_creates_request_for_existing_user() -> None:
     request_repo = FakeDownloadRequestRepository()
     task_queue = FakeTaskQueue()
 
-    use_case = RequestDownloadUseCase(user_repo, request_repo, task_queue)
+    use_case = RequestDownloadUseCase(user_repo, request_repo, task_queue, FormatPolicy({}))
     request = await use_case.execute(
-        telegram_id=42, url="https://example.com/video", chat_id=1, message_id=2
+        telegram_id=42,
+        url="https://example.com/video",
+        spec=DEFAULT_DOWNLOAD_SPEC,
+        extractor_key="youtube",
+        chat_id=1,
+        message_id=2,
     )
 
     assert request.user_id == existing_user.id
@@ -88,9 +102,14 @@ async def test_registers_new_user_on_the_fly() -> None:
     request_repo = FakeDownloadRequestRepository()
     task_queue = FakeTaskQueue()
 
-    use_case = RequestDownloadUseCase(user_repo, request_repo, task_queue)
+    use_case = RequestDownloadUseCase(user_repo, request_repo, task_queue, FormatPolicy({}))
     request = await use_case.execute(
-        telegram_id=999, url="https://example.com/video", chat_id=1, message_id=2
+        telegram_id=999,
+        url="https://example.com/video",
+        spec=DEFAULT_DOWNLOAD_SPEC,
+        extractor_key="youtube",
+        chat_id=1,
+        message_id=2,
     )
 
     created_user = await user_repo.get_by_telegram_id(999)
@@ -104,10 +123,79 @@ async def test_rejects_malformed_url_before_touching_repo_or_queue() -> None:
     request_repo = FakeDownloadRequestRepository()
     task_queue = FakeTaskQueue()
 
-    use_case = RequestDownloadUseCase(user_repo, request_repo, task_queue)
+    use_case = RequestDownloadUseCase(user_repo, request_repo, task_queue, FormatPolicy({}))
 
     with pytest.raises(UnsupportedURLError):
-        await use_case.execute(telegram_id=1, url="not-a-url", chat_id=1, message_id=2)
+        await use_case.execute(
+            telegram_id=1,
+            url="not-a-url",
+            spec=DEFAULT_DOWNLOAD_SPEC,
+            extractor_key="youtube",
+            chat_id=1,
+            message_id=2,
+        )
 
     assert request_repo.created == []
     assert task_queue.enqueued_download_ids == []
+
+
+# --- Day 11C (v2): FormatPolicy enforcement -----------------------------------
+
+_NO_YOUTUBE_AUDIO = FormatPolicy({"youtube": [FormatKind.AUDIO]})
+
+
+@pytest.mark.parametrize("extractor_key", ["youtube", "YouTube"])
+@pytest.mark.asyncio
+async def test_disallowed_spec_is_refused_before_anything_is_persisted(
+    extractor_key: str,
+) -> None:
+    # A stale card (rendered before the switch was flipped) or a forged
+    # callback lands here; nothing may be created or enqueued.
+    request_repo = FakeDownloadRequestRepository()
+    task_queue = FakeTaskQueue()
+    use_case = RequestDownloadUseCase(
+        FakeUserRepository(User.create_from_telegram(42)),
+        request_repo,
+        task_queue,
+        _NO_YOUTUBE_AUDIO,
+    )
+
+    with pytest.raises(FormatNotAllowedError):
+        await use_case.execute(
+            42,
+            "https://youtube.com/watch?v=x",
+            AudioSpec(),
+            extractor_key,
+            chat_id=1,
+            message_id=2,
+        )
+
+    assert request_repo.created == []
+    assert task_queue.enqueued_download_ids == []
+
+
+@pytest.mark.parametrize(
+    ("spec", "extractor_key"),
+    [
+        (VideoSpec(VideoTier.P1080), "youtube"),  # other kind, same source
+        (AudioSpec(), "tiktok"),  # same kind, other source
+    ],
+)
+@pytest.mark.asyncio
+async def test_kill_switch_is_scoped_to_kind_and_extractor(
+    spec: DownloadSpec, extractor_key: str
+) -> None:
+    request_repo = FakeDownloadRequestRepository()
+    use_case = RequestDownloadUseCase(
+        FakeUserRepository(User.create_from_telegram(42)),
+        request_repo,
+        FakeTaskQueue(),
+        _NO_YOUTUBE_AUDIO,
+    )
+
+    request = await use_case.execute(
+        42, "https://example.com/v", spec, extractor_key, chat_id=1, message_id=2
+    )
+
+    assert request.spec == spec
+    assert len(request_repo.created) == 1

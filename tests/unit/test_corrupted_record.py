@@ -11,17 +11,16 @@ classified and clean).
 
 Two policies, tested separately here:
 
-* columns with a truthful fallback (media_type/format_kind/quality_kind)
-  degrade and log;
-* ``status``, which has no non-lying fallback, raises
-  ``CorruptedRecordError`` — a domain error the worker reports — never
-  ``ValueError``.
+* columns with a truthful fallback (media_type) degrade and log;
+* ``status`` and the ``(format_kind, video_tier)`` spec pair, which have
+  no non-lying fallback, raise ``CorruptedRecordError`` — a domain error
+  the worker reports — never ``ValueError``.
 
 These tests poke ``_to_entity`` with a stub row rather than going
 through a database, because the point is the parsing policy, not the
 SQL: Postgres will happily store any string in these varchar columns
-(there is deliberately no CHECK constraint), so a fake row is a faithful
-model of what can arrive.
+(the only CHECK pins the kind/tier PAIRING, not the values), so a fake
+row is a faithful model of what can arrive.
 """
 
 from __future__ import annotations
@@ -34,9 +33,8 @@ import pytest
 import structlog
 
 from src.domain.exceptions import CorruptedRecordError
+from src.domain.value_objects.download_spec import AudioSpec, VideoSpec, VideoTier
 from src.domain.value_objects.enums import DownloadStatus, MediaType
-from src.domain.value_objects.format_kind import FormatKind
-from src.domain.value_objects.quality_kind import QualityKind
 from src.infrastructure.database.repositories.download_request_repository import _to_entity
 
 
@@ -50,7 +48,7 @@ class _Row:
         media_type: str = "video",
         status: str = "pending",
         format_kind: str = "video",
-        quality_kind: str = "hd_720",
+        video_tier: str | None = "p720",
     ) -> None:
         self.id = uuid4()
         self.user_id = uuid4()
@@ -58,33 +56,50 @@ class _Row:
         self.media_type = media_type
         self.status = status
         self.format_kind = format_kind
-        self.quality_kind = quality_kind
+        self.video_tier = video_tier
         self.created_at = datetime.now(UTC)
         self.completed_at: datetime | None = None
 
 
-def _entity(**kwargs: str) -> Any:
+def _entity(**kwargs: str | None) -> Any:
     return _to_entity(_Row(**kwargs))  # type: ignore[arg-type]
 
 
 def test_clean_row_maps_straight_through() -> None:
-    entity = _entity(media_type="audio", status="done", format_kind="audio", quality_kind="hd_1080")
+    entity = _entity(media_type="audio", status="done", format_kind="audio", video_tier=None)
     assert entity.media_type is MediaType.AUDIO
     assert entity.status is DownloadStatus.DONE
-    assert entity.format_kind is FormatKind.AUDIO
-    assert entity.quality_kind is QualityKind.HD_1080
+    assert entity.spec == AudioSpec()
+    assert _entity(video_tier="p1080").spec == VideoSpec(VideoTier.P1080)
 
 
 def test_unknown_media_type_degrades_to_unknown() -> None:
     assert _entity(media_type="hologram").media_type is MediaType.UNKNOWN
 
 
-def test_unknown_format_kind_degrades_to_video() -> None:
-    assert _entity(format_kind="flac").format_kind is FormatKind.VIDEO
+@pytest.mark.parametrize(
+    ("format_kind", "video_tier"),
+    [
+        ("flac", None),  # unknown kind
+        ("flac", "p720"),
+        ("video", "p2160"),  # unknown tier
+        ("video", None),  # video without a tier
+        ("audio", "p720"),  # audio with a tier
+    ],
+)
+def test_unreadable_spec_raises_corrupted_record(format_kind: str, video_tier: str | None) -> None:
+    # No honest fallback: guessing a format the user didn't pick is the
+    # silent wrong delivery of 11A.1, so the pair fails loudly instead.
+    row = _Row(format_kind=format_kind, video_tier=video_tier)
 
+    with pytest.raises(CorruptedRecordError) as caught:
+        _to_entity(row)  # type: ignore[arg-type]
 
-def test_unknown_quality_kind_degrades_to_default_tier() -> None:
-    assert _entity(quality_kind="hd_2160").quality_kind is QualityKind.HD_720
+    exc = caught.value
+    assert exc.column == "spec"
+    assert exc.raw_value == f"{format_kind}/{video_tier}"
+    assert exc.request_id == row.id
+    assert exc.error_key == "error-internal"
 
 
 def test_unknown_status_raises_corrupted_record_not_value_error() -> None:
@@ -133,14 +148,3 @@ def test_clean_row_logs_nothing() -> None:
         _to_entity(_Row())  # type: ignore[arg-type]
 
     assert logs == []
-
-
-def test_each_degraded_column_is_named_in_its_own_warning() -> None:
-    # All three at once: one warning per column, each naming itself, so a
-    # multi-column mess is diagnosable from the log alone.
-    row = _Row(media_type="hologram", format_kind="flac", quality_kind="hd_2160")
-
-    with structlog.testing.capture_logs() as logs:
-        _to_entity(row)  # type: ignore[arg-type]
-
-    assert {entry["column"] for entry in logs} == {"media_type", "format_kind", "quality_kind"}

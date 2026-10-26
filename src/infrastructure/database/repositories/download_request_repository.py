@@ -6,8 +6,9 @@ fixed the moment the request is created and never changes over the
 request's lifecycle (only status/completed_at do), so writing it back on
 every state transition would be pointless churn.
 
-Day 11C: ``quality_kind`` follows exactly the same rule (mapped on read
-and on create, never on update).
+Day 11C (v2): the request's ``DownloadSpec`` is stored as the pair
+``(format_kind, video_tier)`` and follows exactly the same rule (mapped
+on read and on create, never on update).
 
 Day 11C.3 — READ-SIDE HARDENING. ``_to_entity`` used to build every enum
 with its bare constructor (``MediaType(row.media_type)`` etc.). A value
@@ -20,13 +21,17 @@ the user got nothing (bugs #6 and #13).
 Now every enum column is parsed defensively, with the policy living on
 the enum itself:
 
-* ``media_type`` → UNKNOWN, ``format_kind`` → VIDEO, ``quality_kind`` →
-  HD_720. Each fallback is TRUE of an unreadable value, and each is
-  logged here (not in the domain) because only this layer knows the
-  request id — without it a warning can't lead back to the bad row.
+* ``media_type`` → UNKNOWN. The fallback is TRUE of an unreadable
+  value, and it is logged here (not in the domain) because only this
+  layer knows the request id — without it a warning can't lead back to
+  the bad row.
 * ``status`` has no honest fallback (see DownloadStatus in enums.py), so
   it raises ``CorruptedRecordError``, which the worker handles like any
   other categorized failure.
+* ``(format_kind, video_tier)`` → ``DownloadSpec`` has no honest fallback
+  either (Day 11C v2): delivering a format the user did not pick is the
+  silent wrong delivery 11A.1 was. Any pair ``spec_from_parts`` rejects
+  raises ``CorruptedRecordError(column="spec")``.
 
 That exception is correct for ``get_by_id`` — one unreadable row means
 that one request cannot be processed. It is NOT correct for
@@ -36,10 +41,13 @@ user has. So the listing SKIPS unreadable rows (loudly, in the log) and
 returns the rest. Same data, two different right answers, because the
 blast radius differs.
 
-No CHECK constraint backs this up on the database side, deliberately:
-the application is the only writer, so a constraint would only restate
-what the writer already guarantees, while the read path needs this
-guard regardless of how the bad value got there.
+The single-column enums have no CHECK constraint, deliberately: the
+application is the only writer, so a constraint would only restate what
+the writer already guarantees. The spec pair DOES get one
+(``ck_download_requests_video_tier_kind``, migration 0005): it is a
+cross-column invariant the old schema could not express, and pinning it
+in the schema makes the backfill provably complete. Unknown tier VALUES
+still pass the CHECK, so the read path keeps its guard regardless.
 """
 
 from __future__ import annotations
@@ -52,18 +60,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.domain.entities.download_request import DownloadRequest
 from src.domain.exceptions import CorruptedRecordError
+from src.domain.value_objects.download_spec import (
+    DownloadSpec,
+    spec_from_parts,
+    spec_kind,
+    spec_video_tier,
+)
 from src.domain.value_objects.enums import DownloadStatus, MediaType
-from src.domain.value_objects.format_kind import FormatKind
-from src.domain.value_objects.quality_kind import QualityKind
 from src.infrastructure.database.models import DownloadRequestModel
 from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-def _degraded[E: (MediaType, FormatKind, QualityKind)](
-    parsed: E, raw: str, *, column: str, model: DownloadRequestModel
-) -> E:
+def _degraded(
+    parsed: MediaType, raw: str, *, column: str, model: DownloadRequestModel
+) -> MediaType:
     """Log when a stored value had to be degraded to a fallback.
 
     Detects the degrade by comparing against the raw string rather than
@@ -101,6 +113,20 @@ def _parse_status(model: DownloadRequestModel) -> DownloadStatus:
         ) from exc
 
 
+def _parse_spec(model: DownloadRequestModel) -> DownloadSpec:
+    """Strict parse of the ``(format_kind, video_tier)`` pair — see the
+    module docstring for why there is no fallback."""
+    try:
+        return spec_from_parts(model.format_kind, model.video_tier)
+    except ValueError as exc:
+        raise CorruptedRecordError(
+            column="spec",
+            raw_value=f"{model.format_kind}/{model.video_tier}",
+            request_id=model.id,
+            user_id=model.user_id,
+        ) from exc
+
+
 def _to_entity(model: DownloadRequestModel) -> DownloadRequest:
     return DownloadRequest(
         id=model.id,
@@ -113,21 +139,15 @@ def _to_entity(model: DownloadRequestModel) -> DownloadRequest:
             model=model,
         ),
         status=_parse_status(model),
-        format_kind=_degraded(
-            FormatKind.from_db_value(model.format_kind),
-            model.format_kind,
-            column="format_kind",
-            model=model,
-        ),
-        quality_kind=_degraded(
-            QualityKind.from_db_value(model.quality_kind),
-            model.quality_kind,
-            column="quality_kind",
-            model=model,
-        ),
+        spec=_parse_spec(model),
         created_at=model.created_at,
         completed_at=model.completed_at,
     )
+
+
+def _tier_value(spec: DownloadSpec) -> str | None:
+    tier = spec_video_tier(spec)
+    return tier.value if tier is not None else None
 
 
 class SqlAlchemyDownloadRequestRepository:
@@ -145,8 +165,8 @@ class SqlAlchemyDownloadRequestRepository:
             source_url=download_request.source_url,
             media_type=download_request.media_type.value,
             status=download_request.status.value,
-            format_kind=download_request.format_kind.value,
-            quality_kind=download_request.quality_kind.value,
+            format_kind=spec_kind(download_request.spec).value,
+            video_tier=_tier_value(download_request.spec),
         )
         self._session.add(model)
         await self._session.flush()

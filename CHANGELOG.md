@@ -5,6 +5,47 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-10-26
+
+Video quality v2: what the user asks for is a `DownloadSpec`, quality is
+the video's short side, and a per-source kill-switch decides which
+formats are offered and accepted.
+
+### Added
+
+- `DownloadSpec` sum type (`VideoSpec(tier) | AudioSpec(codec)`) and `VideoTier` (`p720`, `p1080`, `best`). `VideoTier.short_side` is the only tier → pixels mapping. See `docs/adr/0001-download-spec-sum-type.md`.
+- `FormatPolicy` (`DISABLED_FORMATS`, e.g. `{"youtube": ["audio"]}`): one rule set for the buttons (`offered_choices`) and for enforcement in `RequestDownloadUseCase` (`FormatNotAllowedError`, `error-format-not-allowed`). See `docs/adr/0002-format-policy-kill-switch.md`.
+- Quality step only where there is a choice: short side ≥ 1080 → `[720p][1080p]`; 721–1079 → `[720p][<N>p (best)]`; ≤ 720 or unknown → no step, the video button downloads `best` directly (TikTok).
+- `MediaPreview.extractor_key` and `max_compatible_short_side` (short side of the best h264 video; all video formats when the source has no h264).
+- `PreviewContext` (URL + extractor + short side) stored as JSON instead of a bare URL; the buttons act on what the preview observed, never on callback data.
+- Callback code `vbest`; `btn-quality-best` locale key.
+- `BLOCKED_DOMAINS` (default `["music.youtube.com"]`): exceptions carved out of the suffix-matched allowlist, checked first.
+- Fixture-based selection tests: yt-dlp's own selector runs with production options over captured format lists (YouTube, Shorts, TikTok), including a guard that the original audio track wins over auto-dubs.
+- CI job running the migration test against a real PostgreSQL service.
+
+### Changed
+
+- Video quality is a format sort on the short side (`bv*+ba/b`, `format_sort=[res:<N>, vcodec:h264, acodec:aac, ext:mp4:m4a]`) instead of a height filter. One codec constant drives both the sort and the preview's short side.
+- Keyboards are rendered from `OfferedChoices`; `q:` / `back:` re-derive them from the stored context and the current policy on every tap.
+- `/download` checks the allowlist, fetches a preview (extractor needed by the policy) and asks for `FormatPolicy.default_video_spec` — the same spec the card's video button would download.
+- The spec crosses the spawn boundary as the two persisted primitives and is rebuilt in the child with `spec_from_parts`.
+- yt-dlp no longer draws its progress bar on the worker's stdout (`noprogress`).
+- `tests/unit/test_ytdlp_downloader.py` is type-checked in CI; its runner fakes are typed against `RunDownloadInProcess`.
+
+### Fixed
+
+- Vertical video was downgraded: a 1080x1920 Short requested at "720" arrived 360x640, at "1080" 480x854 (height cap applied to the long side).
+- `/download` bypassed the domain allowlist.
+
+### Removed
+
+- `QualityKind` and the `quality_kind` column.
+
+### Upgrade notes
+
+- Migration `0005_video_tier`: adds `video_tier` (backfilled `hd_1080` → `p1080`, other video rows → `p720`, audio → NULL), a CHECK that video rows have a tier and audio rows don't, drops `quality_kind` and the `format_kind` server default. Deploy order: stop bot and worker → `alembic upgrade head` → start (the bot entrypoint runs the upgrade). The downgrade is lossy: `best` becomes `hd_720`.
+- Preview cards rendered before the upgrade read as expired (the store format changed); they live at most `PREVIEW_CONTEXT_TTL_SECONDS` (600 s).
+
 ## [1.0.0] - 2026-10-21
 
 Production hardening, enforced layer boundaries and repository polish.

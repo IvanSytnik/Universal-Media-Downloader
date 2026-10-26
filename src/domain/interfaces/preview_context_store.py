@@ -1,5 +1,6 @@
 """PreviewContextStorePort — short-lived storage that maps an opaque
-token to a source URL.
+token to a PreviewContext (Day 7: a bare source URL; Day 11C v2: the URL
+plus the extractor key and compatible short side the buttons need).
 
 Why this exists at all: Telegram limits `callback_data` on inline
 buttons to 64 bytes — a real URL simply does not fit. So the ✅ button
@@ -8,24 +9,27 @@ keyed by that token, with a TTL. Token expiry doubles as UX protection
 against clicking a week-old preview button.
 
 Domain knows nothing about Redis — the interface speaks in tokens and
-URLs only. The Redis implementation lives in infrastructure.
+PreviewContext only. The Redis implementation lives in infrastructure.
 """
 
 from __future__ import annotations
 
 from typing import Protocol
 
+from src.domain.value_objects.preview_context import PreviewContext
+
 
 class PreviewContextStorePort(Protocol):
-    async def save(self, url: str) -> str:
-        """Stores `url` and returns an opaque token (short, callback-safe).
+    async def save(self, context: PreviewContext) -> str:
+        """Stores `context` and returns an opaque token (short, callback-safe).
 
         The stored entry expires after an implementation-configured TTL.
         """
         ...
 
-    async def get(self, token: str) -> str | None:
-        """Returns the URL for `token`, or None if unknown/expired."""
+    async def get(self, token: str) -> PreviewContext | None:
+        """Returns the context for `token`, or None if unknown/expired
+        (or unreadable — treated exactly like expired)."""
         ...
 
     async def delete(self, token: str) -> None:
@@ -34,8 +38,8 @@ class PreviewContextStorePort(Protocol):
         the button, or cancel after expiry)."""
         ...
 
-    async def pop(self, token: str) -> str | None:
-        """Atomically returns the URL for `token` AND removes it.
+    async def pop(self, token: str) -> PreviewContext | None:
+        """Atomically returns the context for `token` AND removes it.
 
         Day 11C stage 4. ``get`` followed by ``delete`` is not equivalent:
         two fast taps on the same button both complete their ``get``

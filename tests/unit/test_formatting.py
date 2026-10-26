@@ -60,6 +60,8 @@ def _preview(
         uploader=uploader,
         thumbnail_url=None,
         media_type=media_type,
+        extractor_key="youtube",
+        max_compatible_short_side=1080,
     )
 
 

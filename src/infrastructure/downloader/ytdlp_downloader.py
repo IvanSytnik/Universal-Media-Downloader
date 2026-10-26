@@ -31,8 +31,8 @@ exception carries a semantic ``error_key``, never the diagnostic text
 (bug #6). The Presentation layer and the worker path both map that key
 to a localized message.
 
-**Day 11A — audio vs video.** ``download()`` now honours
-``options.format_kind``. VIDEO downloads an mp4 (see Day 11C below for
+**Day 11A — audio vs video.** ``download()`` honours the requested
+kind (since Day 11C v2: ``options.spec``). VIDEO downloads an mp4 (see Day 11C below for
 the current selector). AUDIO uses a bestaudio selector
 plus an ``FFmpegExtractAudio`` postprocessor that produces an mp3 — the
 system ffmpeg binary (already required, PROJECT_SPEC §2) does the
@@ -99,9 +99,26 @@ The video selector now explicitly asks for separate video+audio streams
 (``bestvideo+bestaudio``), which is what the existing
 ``merge_output_format: mp4`` was always there to reassemble — the old
 ``best[ext=mp4]/best`` never requested them, so the merge had nothing to
-do. Height is capped by ``max_height`` (720 by default; stage 2 will let
-the user choose). ``vcodec^=avc1`` is deliberate and costs file size: it
-is what keeps the result playable inline in Telegram clients.
+do. (Stage 1 capped it by height with ``[height<=N][vcodec^=avc1]`` —
+superseded below.)
+
+**Day 11C (v2) — short side, not height.** Stage 0 diagnostics showed
+the height cap degrading vertical video: a 1080x1920 Short asked for at
+"720" came back 360x640, at "1080" 480x854. The selector is now
+``bv*+ba/b`` with a format SORT — ``res:<short side>`` (yt-dlp's ``res``
+is ``min(width, height)``), then the compatible codec, aac, mp4/m4a —
+and ``res`` is omitted for ``VideoTier.BEST``. ``res`` is a soft
+preference, not a cap: size protection stays with ``max_filesize`` plus
+the pre-download size check (bug #5).
+
+The compatible codec is ONE constant, ``_COMPATIBLE_VCODEC``, read by
+both the download's ``format_sort`` and the preview's
+``max_compatible_short_side`` — so the quality buttons a user is shown
+are computed from exactly the formats the download will prefer (TikTok:
+1080p exists only as h265, h264 tops out at 720p, so no quality step).
+
+The spec crosses the spawn boundary as two primitives (kind value, tier
+value or None) and is rebuilt in the child with ``spec_from_parts``.
 """
 
 from __future__ import annotations
@@ -114,7 +131,7 @@ import queue
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import yt_dlp
 
@@ -126,26 +143,57 @@ from src.domain.exceptions import (
 from src.domain.interfaces.downloader import ProgressCallback
 from src.domain.value_objects.download_options import DownloadOptions
 from src.domain.value_objects.download_progress import DownloadProgress
+from src.domain.value_objects.download_spec import (
+    AudioSpec,
+    DownloadSpec,
+    VideoSpec,
+    spec_from_parts,
+    spec_kind,
+    spec_video_tier,
+)
 from src.domain.value_objects.enums import MediaType
 from src.domain.value_objects.format_kind import FormatKind
 from src.domain.value_objects.media_preview import MediaPreview
 from src.domain.value_objects.progress_phase import ProgressPhase
-from src.domain.value_objects.quality_kind import QualityKind
 from src.infrastructure.downloader.error_classifier import classify_error
 from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Default height cap for the video path — the fallback for the internal
-# helpers' `max_height` parameter, kept so they stay callable standalone
-# (tests, future callers).
-#
-# Day 11C stage 3: DERIVED from the domain enum, never a second literal
-# 720. `download()` now takes the real value from
-# `options.quality_kind.max_height`, so `QualityKind` is the single
-# tier→height mapping in the project; writing `720` here again would be
-# the parallel mapping that silently goes stale the day a tier changes.
-_DEFAULT_MAX_HEIGHT = QualityKind.HD_720.max_height
+# Day 11C (v2): the video codec Telegram clients play inline. ONE
+# definition with two readers — the download's `format_sort` and the
+# preview's `max_compatible_short_side` — so the quality buttons can't be
+# computed from formats the download wouldn't prefer. Spelled the way
+# yt-dlp's `format_sort` spells it.
+_COMPATIBLE_VCODEC = "h264"
+
+# How each `format_sort` codec name appears in a format dict's `vcodec`
+# (YouTube: "avc1.640028", TikTok: "h264"). Keyed by the sort name, so
+# changing `_COMPATIBLE_VCODEC` changes the preview side with it.
+_VCODEC_PREFIXES: dict[str, tuple[str, ...]] = {
+    "h264": ("avc1", "h264"),
+    "h265": ("hvc1", "hev1", "h265"),
+    "vp9": ("vp9", "vp09"),
+    "av01": ("av01",),
+}
+
+
+def _max_compatible_short_side(formats: list[dict[str, Any]]) -> int | None:
+    """Largest ``min(width, height)`` among video formats in the
+    compatible codec; among ALL video formats if the source has none in
+    it; None if no video format reports its dimensions."""
+    sized = [
+        f
+        for f in formats
+        if f.get("vcodec") not in (None, "none") and f.get("width") and f.get("height")
+    ]
+    prefixes = _VCODEC_PREFIXES[_COMPATIBLE_VCODEC]
+    compatible = [f for f in sized if str(f["vcodec"]).startswith(prefixes)]
+    pool = compatible or sized
+    if not pool:
+        return None
+    return max(min(int(f["width"]), int(f["height"])) for f in pool)
+
 
 _YDL_OPTS_PREVIEW: dict[str, Any] = {
     "quiet": True,
@@ -160,6 +208,11 @@ _YDL_OPTS_PREVIEW: dict[str, Any] = {
     # 403s or missing formats appear again, update yt-dlp first
     # (`docker compose build --no-cache`) — do not pin a client.
 }
+
+
+def _video_tier_value(spec: DownloadSpec) -> str | None:
+    tier = spec_video_tier(spec)
+    return tier.value if tier is not None else None
 
 
 def _extract_info_sync(url: str) -> dict[str, Any] | None:
@@ -181,15 +234,14 @@ def _guess_media_type(info: dict[str, Any]) -> MediaType:
 def _build_download_ydl_opts(
     output_dir: str,
     max_filesize_bytes: int | None,
-    format_kind: FormatKind,
+    spec: DownloadSpec,
     post_hook: Any,
     progress_hook: Callable[[dict[str, Any]], None] | None = None,
-    max_height: int = _DEFAULT_MAX_HEIGHT,
 ) -> dict[str, Any]:
     """Assemble the ydl_opts for the real download.
 
     Day 11A: the ONLY difference between video and audio lives here — the
-    ``format`` selector and (for audio) the ``FFmpegExtractAudio``
+    format selection and (for audio) the ``FFmpegExtractAudio``
     postprocessor. Everything else (retries, timeouts, restrictfilenames,
     post_hooks) is identical across both, so it's built once and the
     format-specific keys are layered on top. This keeps the two paths
@@ -198,16 +250,10 @@ def _build_download_ydl_opts(
     Day 11B: ``progress_hook`` (optional, defaults to no hook at all) is
     yt-dlp's own ``progress_hooks`` mechanism — distinct from
     ``post_hook``/``post_hooks``, which fires once at the very end.
-    Defaulting to None (rather than requiring every caller to pass one)
-    keeps the existing direct tests of this function unchanged.
 
-    Day 11C stage 1: ``max_height`` caps the video path's resolution and
-    is ignored on the audio path. It is the LAST parameter, after
-    ``progress_hook``, rather than next to the other format inputs, so
-    that existing positional call sites keep meaning what they say —
-    slotting an int between ``format_kind`` and ``post_hook`` would
-    silently rebind ``post_hook`` (typed ``Any``, so nothing would catch
-    it).
+    Day 11C (v2): takes the whole ``spec``. Video quality is a format
+    SORT on the tier's short side, not a height filter — see the module
+    docstring.
     """
     ydl_opts: dict[str, Any] = {
         "quiet": True,
@@ -226,39 +272,36 @@ def _build_download_ydl_opts(
         "progress_hooks": [progress_hook] if progress_hook is not None else [],
     }
 
-    if format_kind is FormatKind.AUDIO:
-        # bestaudio, then transcode to mp3 via the system ffmpeg. The
-        # postprocessor rewrites the extension; post_hooks reports the
-        # real .mp3 path afterwards (bug #4), so no filename prediction.
-        # `[ext=m4a]` first: prefer a real audio-only track over whatever
-        # bare `bestaudio` resolves to, so we don't pull a full muxed
-        # stream just to throw the video away in ffmpeg. `max_height` is
-        # deliberately absent — there is no video stream to cap.
-        ydl_opts["format"] = "bestaudio[ext=m4a]/bestaudio/best"
-        ydl_opts["postprocessors"] = [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192",
-            }
-        ]
-    else:
-        # Day 11C stage 1 — see the module docstring for the full
-        # diagnosis. Ask for separate streams first (that's what
-        # merge_output_format below was always for; the old
-        # `best[ext=mp4]/best` never requested them, which is why every
-        # download came back as the single combined 360p format 18).
-        # `vcodec^=avc1` costs file size and is kept on purpose: it is
-        # what makes the result play inline in Telegram clients. The
-        # remaining fallbacks degrade gracefully — capped combined, then
-        # any mp4, then anything at all — so a source without avc1 or
-        # without separate tracks still downloads.
-        ydl_opts["format"] = (
-            f"bestvideo[height<={max_height}][vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]"
-            f"/best[ext=mp4][height<={max_height}]"
-            f"/best[ext=mp4]/best"
-        )
-        ydl_opts["merge_output_format"] = "mp4"
+    match spec:
+        case AudioSpec():
+            # bestaudio, then transcode to mp3 via the system ffmpeg. The
+            # postprocessor rewrites the extension; post_hooks reports the
+            # real .mp3 path afterwards (bug #4), so no filename prediction.
+            # `[ext=m4a]` first: prefer a real audio-only track over whatever
+            # bare `bestaudio` resolves to, so we don't pull a full muxed
+            # stream just to throw the video away in ffmpeg.
+            ydl_opts["format"] = "bestaudio[ext=m4a]/bestaudio/best"
+            ydl_opts["postprocessors"] = [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": spec.codec.value,
+                    "preferredquality": "192",
+                }
+            ]
+        case VideoSpec(tier=tier):
+            # Separate streams first (what merge_output_format reassembles),
+            # any single file as the fallback. WHICH streams is decided by
+            # the sort: closest to the tier's short side (no preference for
+            # BEST), then the inline-playable codec, aac, mp4/m4a. The
+            # audio track's language is not ours to sort: yt-dlp ranks the
+            # original track above auto-dubs on its own (pinned by the
+            # fixture tests — youtube_1080 carries 20 dubbed tracks).
+            sort = [f"vcodec:{_COMPATIBLE_VCODEC}", "acodec:aac", "ext:mp4:m4a"]
+            if tier.short_side is not None:
+                sort.insert(0, f"res:{tier.short_side}")
+            ydl_opts["format"] = "bv*+ba/b"
+            ydl_opts["format_sort"] = sort
+            ydl_opts["merge_output_format"] = "mp4"
 
     if max_filesize_bytes:
         # Also passed to yt-dlp itself as a backstop, but NOT relied
@@ -375,9 +418,9 @@ def _download_worker_entrypoint(
     output_dir: str,
     max_filesize_bytes: int | None,
     format_kind_value: str,
+    video_tier_value: str | None,
     result_queue: multiprocessing.Queue[tuple[str, str]],
     progress_queue: multiprocessing.Queue[dict[str, Any]],
-    max_height: int = _DEFAULT_MAX_HEIGHT,
 ) -> None:
     """Entrypoint for the child process. This is the isolation boundary —
     everything yt-dlp/ffmpeg does happens here, in a process that can be
@@ -399,9 +442,10 @@ def _download_worker_entrypoint(
     data, just the boundary signal. VIDEO downloads still discard it:
     there's no ffmpeg transcode step on that path worth announcing.
 
-    Day 11C stage 1: ``max_height`` crosses the boundary as a plain int
-    (pickle-safe, like ``format_kind_value``) and goes straight into
-    ``_build_download_ydl_opts``.
+    Day 11C (v2): the spec crosses the boundary as the same two
+    primitives it is persisted as (``format_kind_value`` and
+    ``video_tier_value``) and is rebuilt here with ``spec_from_parts`` —
+    pickle-safe, and one strict parser for both the DB and this boundary.
     """
     try:
         # `post_hooks` is yt-dlp's own documented mechanism for exactly
@@ -421,14 +465,14 @@ def _download_worker_entrypoint(
             with contextlib.suppress(Exception):
                 progress_queue.put_nowait(raw)
 
-        format_kind = FormatKind(format_kind_value)
+        spec = spec_from_parts(format_kind_value, video_tier_value)
+        format_kind = spec_kind(spec)
         ydl_opts = _build_download_ydl_opts(
             output_dir=output_dir,
             max_filesize_bytes=max_filesize_bytes,
-            format_kind=format_kind,
+            spec=spec,
             post_hook=_record_final_filename,
             progress_hook=_record_progress,
-            max_height=max_height,
         )
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -625,14 +669,38 @@ def _wait_and_drain_progress(
     process.join()  # already exited — reap the zombie, effectively instant
 
 
+class RunDownloadInProcess(Protocol):
+    """The exact call shape of ``_run_download_in_process`` — positional,
+    because ``run_in_executor`` passes it that way.
+
+    Tests replace the runner with fakes; annotating them with this
+    protocol lets mypy flag a fake that drifts from the real signature.
+    One already did silently: a stand-in with the pre-v2 argument order
+    took the tier string as its ``progress_sink``, and the progress drain
+    waited forever instead of failing.
+    """
+
+    def __call__(
+        self,
+        url: str,
+        output_dir: str,
+        max_filesize_bytes: int | None,
+        timeout_seconds: int,
+        format_kind_value: str,
+        video_tier_value: str | None,
+        progress_sink: Callable[[dict[str, Any] | None], None] | None = None,
+        /,
+    ) -> str: ...
+
+
 def _run_download_in_process(
     url: str,
     output_dir: str,
     max_filesize_bytes: int | None,
     timeout_seconds: int,
     format_kind_value: str,
+    video_tier_value: str | None,
     progress_sink: Callable[[dict[str, Any] | None], None] | None = None,
-    max_height: int = _DEFAULT_MAX_HEIGHT,
 ) -> str:
     """Blocking. Must only be called via loop.run_in_executor() — never
     directly on the event loop thread. The blocking work here
@@ -643,8 +711,8 @@ def _run_download_in_process(
     `_drain_bridge`'s docstring for why THIS function (not `download()`)
     must be the one to signal "no more progress events are coming".
 
-    Day 11C stage 1: `max_height` is forwarded verbatim into the child's
-    args tuple. Nothing about the timeout/terminate contract in
+    Day 11C (v2): the spec primitives are forwarded verbatim into the
+    child's args tuple. Nothing about the timeout/terminate contract in
     `_wait_and_drain_progress` changes.
     """
     ctx = multiprocessing.get_context("spawn")
@@ -657,9 +725,9 @@ def _run_download_in_process(
             output_dir,
             max_filesize_bytes,
             format_kind_value,
+            video_tier_value,
             result_queue,
             progress_queue,
-            max_height,
         ),
     )
     process.start()
@@ -684,6 +752,10 @@ def _run_download_in_process(
     if status == "error":
         raise _DownloadProcessError(payload)
     return payload
+
+
+# The real runner must satisfy its own protocol (checked by mypy on src).
+_RUNNER_CONTRACT: RunDownloadInProcess = _run_download_in_process
 
 
 async def _drain_bridge(
@@ -740,6 +812,11 @@ class YtDlpDownloader:
             uploader=info.get("uploader"),
             thumbnail_url=info.get("thumbnail"),
             media_type=_guess_media_type(info),
+            # Day 11C (v2): both from the extractor's own result — the
+            # preview is the only trusted source for them (see
+            # PreviewContext).
+            extractor_key=str(info.get("extractor_key") or "").lower(),
+            max_compatible_short_side=_max_compatible_short_side(info.get("formats") or []),
         )
 
     async def download(
@@ -777,15 +854,11 @@ class YtDlpDownloader:
                 str(options.output_dir),
                 options.max_filesize_bytes,
                 options.timeout_seconds,
-                options.format_kind.value,
+                # Day 11C (v2): the spec as primitives (pickle-safe across
+                # the spawn boundary), never the dataclass itself.
+                spec_kind(options.spec).value,
+                _video_tier_value(options.spec),
                 progress_sink,
-                # Day 11C stage 3: the user's chosen tier, resolved to a
-                # pixel height by the domain enum. Crosses the process
-                # boundary as a plain int (pickle-safe), like
-                # `format_kind_value` above — never the enum itself.
-                # Ignored by the audio path, which has no video stream
-                # to cap.
-                options.quality_kind.max_height,
             )
         except _DownloadTimeoutError as exc:
             logger.warning("download_failed", url=url, error=str(exc), reason="timeout")

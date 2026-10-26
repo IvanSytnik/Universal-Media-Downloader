@@ -18,8 +18,10 @@ from aiogram.types import BotCommand
 from arq.connections import RedisSettings, create_pool
 from redis.asyncio import Redis
 
+from src.application.policies.format_policy import FormatPolicy
 from src.composition import SqlAlchemyUseCaseProvider
 from src.config.settings import Settings, get_settings
+from src.domain.value_objects.format_kind import FormatKind
 from src.infrastructure.database.engine import create_engine, create_session_factory
 from src.infrastructure.downloader.ytdlp_downloader import YtDlpDownloader
 from src.infrastructure.health import ConnectivityHealthCheck
@@ -79,10 +81,19 @@ async def main() -> None:
     rate_limiter = RedisRateLimiter(redis=redis_client)
     health_check = ConnectivityHealthCheck(settings)
     ping_result_reader = RedisPingResultReader(redis=redis_client)
+    # One policy instance for both readers: the use case enforces it, the
+    # handlers render buttons from it (workflow data `format_policy`).
+    format_policy = FormatPolicy(
+        {
+            extractor: [FormatKind(kind) for kind in kinds]
+            for extractor, kinds in settings.disabled_formats.items()
+        }
+    )
     use_cases = SqlAlchemyUseCaseProvider(
         session_factory=session_factory,
         task_queue=ArqTaskQueue(arq_pool),
         downloader=YtDlpDownloader(),
+        format_policy=format_policy,
     )
 
     # i18n: build the core, start it (loads FTL for every locale), then
@@ -138,6 +149,7 @@ async def main() -> None:
             settings=settings,
             use_cases=use_cases,
             preview_store=preview_store,
+            format_policy=format_policy,
             rate_limiter=rate_limiter,
             health_check=health_check,
             ping_result_reader=ping_result_reader,

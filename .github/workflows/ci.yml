@@ -35,8 +35,11 @@ jobs:
       - name: Format check (ruff)
         run: ruff format --check src tests
 
+      # tests/ is not type-checked yet (backlog); this file is, because its
+      # runner fakes are typed against RunDownloadInProcess to catch
+      # signature drift.
       - name: Type check (mypy --strict)
-        run: mypy --strict src
+        run: mypy --strict src tests/unit/test_ytdlp_downloader.py
 
       # Coverage gate on the core layers; thresholds live in pyproject.toml
       # ([tool.coverage.report]) and the Makefile's `test-cov` target.
@@ -47,6 +50,51 @@ jobs:
           --cov=src/application
           --cov-report=term-missing
           --cov-fail-under=90
+
+  # Migration test against a real PostgreSQL (CHECK constraints, server
+  # defaults and backfills behave differently on SQLite). The test is
+  # opt-in via UMD_MIGRATION_TEST_PG and skipped in lint-and-test.
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: umd
+          POSTGRES_PASSWORD: umd
+          POSTGRES_DB: umd
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U umd"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      UMD_MIGRATION_TEST_PG: 127.0.0.1:5432
+      POSTGRES_USER: umd
+      POSTGRES_PASSWORD: umd
+      BOT_TOKEN: ci-dummy-token
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: uv pip install --system -e ".[dev]"
+
+      # Fails on a skip too: a flag-gated test that silently skips here
+      # would be a test nobody runs.
+      - name: Migration test (upgrade / downgrade on PostgreSQL)
+        run: |
+          set -o pipefail
+          pytest -v -rs tests/integration/test_migration_0005.py | tee pytest.out
+          ! grep -q SKIPPED pytest.out
 
   docker-build:
     runs-on: ubuntu-latest

@@ -131,6 +131,25 @@ class FileTooLargeError(ExtractionError):
         self.limit_mb = limit_mb
 
 
+class FormatNotAllowedError(DownloaderError):
+    """The requested format is switched off for this source by
+    FormatPolicy (Day 11C, per-extractor kill-switch).
+
+    Raised by RequestDownloadUseCase BEFORE anything is persisted, so a
+    stale button rendered before the switch was flipped — or a forged
+    callback — never becomes a request. Not an ``ExtractionError``:
+    nothing was extracted, the request was refused. It sits under
+    ``DownloaderError`` only because the domain has no common base for
+    "error with an ``error_key``" (``CorruptedRecordError`` hangs off
+    ``Exception`` directly) and ``format_download_error`` — the single
+    presentation-side localizer — is typed on ``DownloaderError``. A
+    shared keyed-error base would be the cleaner home; introducing it is
+    a separate refactor across both hierarchies.
+    """
+
+    error_key = "error-format-not-allowed"
+
+
 class NotifierError(Exception):
     """Delivering a result to the user failed (file too large, user
     blocked the bot, Telegram API error, etc.)."""
@@ -140,12 +159,15 @@ class CorruptedRecordError(Exception):
     """A persisted row holds a value this build cannot interpret, and no
     honest fallback exists for it.
 
-    Raised only for columns where degrading would LIE. ``media_type``,
-    ``format_kind`` and ``quality_kind`` all have a truthful default
-    ("unknown", "video", "hd_720"), so an unrecognized value there
+    Raised only for columns where degrading would LIE. ``media_type``
+    has a truthful default ("unknown"), so an unrecognized value there
     degrades with a warning. ``status`` has none: silently reading a
     corrupt status as "pending" would resurrect a finished request and
-    re-run a download the user already received.
+    re-run a download the user already received. Neither does the
+    ``(format_kind, video_tier)`` pair that encodes the DownloadSpec
+    (Day 11C v2): guessing a format the user did not pick is exactly the
+    silent wrong delivery this error exists to prevent. For that pair
+    ``column`` is ``"spec"`` and ``raw_value`` is ``"<kind>/<tier>"``.
 
     It deliberately does NOT raise a bare ``ValueError`` at the call
     site (which is what ``DownloadStatus(row.status)`` used to do). That

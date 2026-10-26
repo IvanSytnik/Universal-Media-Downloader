@@ -184,17 +184,12 @@ class ProcessDownloadUseCase:
             output_dir=output_dir,
             max_filesize_bytes=self._max_deliverable_file_size_bytes,
             timeout_seconds=self._download_timeout_seconds,
-            # Day 11A.1: carry the user's chosen format through to yt-dlp.
-            # Without this the DownloadOptions default (VIDEO) wins and the
-            # MP3 button silently delivers video.
-            format_kind=request.format_kind,
-            # Day 11C stage 3: the SAME link for quality — this is the
-            # line 11A.1 was missing for format_kind. Persisting the tier
-            # (stage 2) does nothing on its own; without this the
-            # DownloadOptions default (HD_720) wins and picking 1080p
-            # silently downloads 720p. Guarded by an argument-capture
-            # test, not a bare downloader mock.
-            quality_kind=request.quality_kind,
+            # Day 11A.1 / 11C: carry the user's choice through to yt-dlp.
+            # Without this the DownloadOptions default wins — the MP3
+            # button silently delivers video, 1080p silently downloads
+            # 720p. Guarded by an argument-capture test, not a bare
+            # downloader mock.
+            spec=request.spec,
         )
 
         async def _on_progress(progress: DownloadProgress) -> None:

@@ -34,7 +34,7 @@ def _make_request(user_id: UUID) -> DownloadRequest:
     11A.1: every time the entity grew a field the use case reads, the
     stand-in silently described a DownloadRequest that no longer exists.
     It happened twice — ``format_kind`` (11A.1) and ``quality_kind``
-    (11C stage 3). Both times it surfaced as AttributeError only because
+    (11C stage 3, since replaced by ``spec``). Both times it surfaced as AttributeError only because
     the use case reads the new field immediately; a field added for a
     later consumer would have diverged quietly, which is exactly the
     class of bug this module is supposed to guard against.

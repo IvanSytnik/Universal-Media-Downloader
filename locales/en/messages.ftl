@@ -15,6 +15,8 @@ btn-cancel = ❌ Cancel
 # exist in both regardless (key parity is a hard rule, see test_i18n).
 btn-quality-720 = 720p
 btn-quality-1080 = 1080p
+# $height — the source's own best short side, e.g. "900" (a string).
+btn-quality-best = { $height }p (best)
 btn-back = ◀️ Back
 
 # --- Menu commands (set_my_commands) ---
@@ -44,7 +46,7 @@ help-text =
     How to use:
     1. Tap “{ btn-download }” below or just send a link as a message.
     2. I'll show a preview — title, author, duration.
-    3. Choose “{ btn-confirm-video }” or “{ btn-confirm-audio }” under the preview and I'll send the file right here.
+    3. Choose “{ btn-confirm-video }” or “{ btn-confirm-audio }” under the preview (for video I'll ask about quality if there's a choice) and I'll send the file right here.
 
     Commands:
     /preview link — video info only
@@ -107,6 +109,8 @@ error-delivery-failed = I downloaded the video but couldn't send it to Telegram.
 # Nothing for the user to act on, so keep it short and free of
 # diagnostics (bug #6) — those go to the log.
 error-internal = Something broke on my side. Please try again — if it keeps happening, send the link once more.
+# Day 11C: FormatPolicy kill-switch — this format is switched off for the source.
+error-format-not-allowed = This format isn't available for this site right now. Send the link again to see what is.
 
 # --- Download progress (Day 11B) ---
 # Rendered OUTSIDE an update context (long-lived listener in the bot

@@ -7,7 +7,9 @@ should be hardcoded anywhere else in the codebase.
 
 from __future__ import annotations
 
-from pydantic import Field, SecretStr
+from typing import Literal
+
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -73,14 +75,20 @@ class Settings(BaseSettings):
     )
     # Exceptions to the allowlist, same suffix match, checked first. For
     # subdomains the allowlist admits but nothing downstream can tell
-    # apart: YouTube Music is extracted as plain "youtube", so a
-    # per-extractor rule can't exclude it. Override via env:
+    # apart: YouTube Music is extracted as plain "youtube", so the
+    # per-extractor DISABLED_FORMATS can't exclude it. Override via env:
     # BLOCKED_DOMAINS='["music.youtube.com"]'
     blocked_domains: list[str] = Field(default=["music.youtube.com"])
     # How long a shown preview stays actionable (the ✅ button under it).
     # After the TTL the stored URL expires in Redis and the button
     # politely reports that the preview is stale.
     preview_context_ttl_seconds: int = Field(default=600)
+    # Day 11C (v2): per-source format kill-switch (FormatPolicy). Keyed by
+    # lowercased yt-dlp extractor_key; a listed kind is hidden on the
+    # preview card AND refused by RequestDownloadUseCase. Empty = all
+    # formats everywhere. Override via env:
+    # DISABLED_FORMATS='{"youtube": ["audio"]}'
+    disabled_formats: dict[str, list[Literal["video", "audio"]]] = Field(default_factory=dict)
 
     # --- Access control ---
     # Telegram user ids allowed to run operational commands (/health,
@@ -153,6 +161,13 @@ class Settings(BaseSettings):
         just with the +asyncpg dialect prefix SQLAlchemy requires.
         """
         return self.postgres_dsn.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+    @field_validator("disabled_formats")
+    @classmethod
+    def _lowercase_extractor_keys(
+        cls, value: dict[str, list[Literal["video", "audio"]]]
+    ) -> dict[str, list[Literal["video", "audio"]]]:
+        return {key.lower(): kinds for key, kinds in value.items()}
 
     @property
     def redis_dsn(self) -> str:

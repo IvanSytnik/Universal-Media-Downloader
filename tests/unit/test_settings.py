@@ -7,6 +7,9 @@ cheap, fast, no external dependencies.
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from src.config.settings import Settings
 
 
@@ -74,3 +77,26 @@ def test_use_local_bot_api_defaults_to_false() -> None:
 
     assert settings.use_local_bot_api is False
     assert settings.local_bot_api_base_url == "http://telegram-bot-api:8081"
+
+
+# --- Day 11C (v2): DISABLED_FORMATS (FormatPolicy kill-switch) -----------------
+
+
+def test_disabled_formats_default_is_empty() -> None:
+    settings = Settings(bot_token="t", _env_file=None)  # type: ignore[arg-type, call-arg]
+    assert settings.disabled_formats == {}
+
+
+def test_disabled_formats_parses_env_json_and_lowercases_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DISABLED_FORMATS", '{"YouTube": ["audio"], "tiktok": ["video", "audio"]}')
+    settings = Settings(bot_token="t", _env_file=None)  # type: ignore[arg-type, call-arg]
+    assert settings.disabled_formats == {"youtube": ["audio"], "tiktok": ["video", "audio"]}
+
+
+def test_disabled_formats_rejects_unknown_kind(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A typo must fail at startup, not silently leave the switch off.
+    monkeypatch.setenv("DISABLED_FORMATS", '{"youtube": ["mp3"]}')
+    with pytest.raises(ValidationError):
+        Settings(bot_token="t", _env_file=None)  # type: ignore[arg-type, call-arg]

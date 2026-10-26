@@ -7,7 +7,9 @@ the request correctly, but the worker built ``DownloadOptions`` without
 it, so the VIDEO default always won and tapping MP3 delivered video. The
 existing use-case tests mocked the downloader without inspecting the
 options, so nothing caught it. This fake CAPTURES the options and asserts
-on ``format_kind`` for both video and audio.
+on the format for both video and audio (since Day 11C v2 carried as
+``DownloadOptions.spec``; every tier is covered in
+test_process_download_spec.py).
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from src.application.use_cases.process_download import ProcessDownloadUseCase
 from src.domain.entities.download_request import DownloadRequest
 from src.domain.entities.user import User
 from src.domain.value_objects.download_options import DownloadOptions
-from src.domain.value_objects.format_kind import FormatKind
+from src.domain.value_objects.download_spec import AudioSpec, VideoSpec, VideoTier
 
 
 class _CapturingDownloader:
@@ -101,13 +103,13 @@ async def test_audio_request_passes_audio_to_downloader() -> None:
     request = DownloadRequest.create(
         user_id=uuid4(),
         source_url="https://youtube.com/watch?v=x",
-        format_kind=FormatKind.AUDIO,
+        spec=AudioSpec(),
     )
     downloader = _CapturingDownloader()
     await _make_use_case(request, downloader).execute(request.id, chat_id=1, message_id=2)
 
     assert downloader.captured_options is not None
-    assert downloader.captured_options.format_kind is FormatKind.AUDIO
+    assert downloader.captured_options.spec == AudioSpec()
 
 
 @pytest.mark.asyncio
@@ -115,10 +117,10 @@ async def test_video_request_passes_video_to_downloader() -> None:
     request = DownloadRequest.create(
         user_id=uuid4(),
         source_url="https://youtube.com/watch?v=x",
-        format_kind=FormatKind.VIDEO,
+        spec=VideoSpec(VideoTier.P720),
     )
     downloader = _CapturingDownloader()
     await _make_use_case(request, downloader).execute(request.id, chat_id=1, message_id=2)
 
     assert downloader.captured_options is not None
-    assert downloader.captured_options.format_kind is FormatKind.VIDEO
+    assert downloader.captured_options.spec == VideoSpec(VideoTier.P720)

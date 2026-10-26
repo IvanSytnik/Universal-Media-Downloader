@@ -1,7 +1,7 @@
 """Domain-level enums. Pure Python, no framework dependency.
 
-``from_db_value`` on ``MediaType`` mirrors ``FormatKind`` and
-``QualityKind``: the database is an untrusted input on the read path, so
+``from_db_value`` on ``MediaType``: the database is an untrusted input
+on the read path, so
 a value this build doesn't recognize degrades to a truthful default
 instead of raising ``ValueError`` deep inside the worker. The enums stay
 free of logging on purpose — only the repository knows which row a bad

@@ -1,0 +1,15 @@
+[TikTok] Extracting URL: https://www.tiktok.com/@nasa/video/7699974130153590029
+[TikTok] 7699974130153590029: Downloading webpage
+[info] Available formats for 7699974130153590029:
+ID                      EXT RESOLUTION |  FILESIZE   TBR PROTO | VCODEC       VBR ACODEC     MORE INFO
+------------------------------------------------------------------------------------------------------------------
+audio                   mp3 audio only |                 https | audio only       mp3
+download                mp4 unknown    |                 https | h264             aac        Untested, watermarked
+bytevc1_540p_380080-0   mp4 576x1024   |   6.97MiB  380k https | h265        380k video only Untested
+bytevc1_540p_380080-1   mp4 576x1024   |   6.97MiB  380k https | h265        380k video only Untested
+h264_720p_855964-0      mp4 720x1280   |  17.42MiB  855k https | h264             aac
+h264_720p_855964-1      mp4 720x1280   |  17.42MiB  855k https | h264             aac
+bytevc1_720p_418528-0   mp4 720x1280   |   8.14MiB  418k https | h265        418k video only Untested
+bytevc1_720p_418528-1   mp4 720x1280   |   8.14MiB  418k https | h265        418k video only Untested
+bytevc1_1080p_1031532-0 mp4 1080x1920  |  20.22MiB 1031k https | h265       1031k video only Untested
+bytevc1_1080p_1031532-1 mp4 1080x1920  |  20.22MiB 1031k https | h265       1031k video only Untested

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import pytest
 
+from src.application.policies.format_policy import OfferedChoices
+from src.domain.value_objects.download_spec import VideoTier
 from src.presentation.telegram.handlers.download_flow import _looks_like_url
 from src.presentation.telegram.i18n import create_i18n_core
 from src.presentation.telegram.keyboards import (
@@ -63,12 +65,16 @@ async def test_main_menu_is_persistent_reply_keyboard(i18n) -> None:
 @pytest.mark.asyncio
 async def test_confirm_keyboard_callback_data_fits_telegram_limit(i18n) -> None:
     token = "a" * 32  # uuid4().hex length
-    kb = preview_confirm_keyboard(i18n, token)
-    for row in kb.inline_keyboard:
-        for button in row:
-            assert button.callback_data is not None
-            # Telegram hard limit: 64 bytes.
-            assert len(button.callback_data.encode("utf-8")) <= 64
+    for choices in (
+        OfferedChoices(video=True, audio=True, video_tiers=(VideoTier.P720, VideoTier.P1080)),
+        OfferedChoices(video=True, audio=True),
+    ):
+        kb = preview_confirm_keyboard(i18n, token, choices)
+        for row in kb.inline_keyboard:
+            for button in row:
+                assert button.callback_data is not None
+                # Telegram hard limit: 64 bytes.
+                assert len(button.callback_data.encode("utf-8")) <= 64
 
 
 def test_confirm_and_cancel_prefixes_are_distinct() -> None:
