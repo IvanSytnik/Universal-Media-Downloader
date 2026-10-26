@@ -125,6 +125,11 @@ progress-downloading-nostream = ⏳ Скачано { $mb } МБ ({ $speed })
 # Day 11B.1 — граница download→постпроцессинг, только audio-путь (mp3).
 # Без процента: прогресс самого транскода вне scope.
 progress-converting = ⏳ Конвертирую в MP3…
+# Day 11D-2 — финальные состояния карточки. Коротко намеренно: причина
+# ошибки приходит отдельным сообщением.
+progress-uploading = ⏳ Отправляю файл…
+progress-done = ✅ Отправлено
+progress-failed = ❌ Не удалось
 
 # --- /download ---
 download-usage = Использование: /download ссылка

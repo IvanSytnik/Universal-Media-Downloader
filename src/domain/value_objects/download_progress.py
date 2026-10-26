@@ -17,6 +17,9 @@ marks the one-shot event at the download→postprocess boundary (audio
 path only, see ytdlp_downloader.py) — when set, ``percent``/
 ``downloaded_bytes``/``total_bytes``/``speed``/``eta`` carry no meaningful
 data and must not be rendered.
+
+Day 11D-2: the same holds for ``UPLOADING`` / ``DONE`` / ``FAILED``;
+``phase_marker`` builds such a data-less snapshot.
 """
 
 from __future__ import annotations
@@ -34,3 +37,10 @@ class DownloadProgress:
     speed: float | None
     eta: int | None
     phase: ProgressPhase = ProgressPhase.DOWNLOADING
+
+
+def phase_marker(phase: ProgressPhase) -> DownloadProgress:
+    """A one-shot phase event: no byte/percent data, only ``phase``."""
+    return DownloadProgress(
+        percent=None, downloaded_bytes=0, total_bytes=None, speed=None, eta=None, phase=phase
+    )

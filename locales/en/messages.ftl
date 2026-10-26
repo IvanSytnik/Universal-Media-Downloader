@@ -124,6 +124,11 @@ progress-downloading-nostream = ⏳ Downloaded { $mb } MB ({ $speed })
 # Day 11B.1 — the download→postprocess boundary, audio path (mp3) only.
 # No percentage: transcode-itself progress is out of scope.
 progress-converting = ⏳ Converting to MP3…
+# Day 11D-2 — the card's last states. Short on purpose: the failure
+# reason arrives as a separate message.
+progress-uploading = ⏳ Sending the file…
+progress-done = ✅ Sent
+progress-failed = ❌ Failed
 
 # --- /download ---
 download-usage = Usage: /download link

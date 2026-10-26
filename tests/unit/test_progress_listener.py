@@ -266,3 +266,101 @@ async def test_handle_message_missing_coordinates_is_ignored(i18n_core) -> None:
     await listener._handle_message(_pmessage("umd:progress:req-5", payload))
 
     assert bot.edits == []
+
+
+# --- Day 11D-2: final states -----------------------------------------------------
+
+
+def _listener(bot: _CapturingBot, i18n_core, throttler: ProgressThrottler | None = None):
+    return TelegramProgressListener(
+        bot=bot,  # type: ignore[arg-type]
+        redis=object(),  # type: ignore[arg-type]
+        i18n_core=i18n_core,
+        default_locale=DEFAULT_LOCALE,
+        throttler=throttler,
+    )
+
+
+def _downloading(channel: str, percent: float) -> dict:
+    return _pmessage(
+        channel,
+        {
+            "percent": percent,
+            "downloaded_bytes": 1,
+            "total_bytes": 10,
+            "speed": None,
+            "eta": None,
+            "chat_id": 1,
+            "message_id": 2,
+            "language": "ru",
+        },
+    )
+
+
+def _phase(channel: str, phase: object) -> dict:
+    return _pmessage(channel, {"phase": phase, "chat_id": 1, "message_id": 2, "language": "ru"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("phase", "key"),
+    [("uploading", "progress-uploading"), ("done", "progress-done"), ("failed", "progress-failed")],
+)
+async def test_final_phases_render_right_after_a_percent_update(
+    i18n_core, phase: str, key: str
+) -> None:
+    # The 61%-forever card: the last percent update and the final state
+    # arrive within the throttle window, and the final state must win.
+    bot = _CapturingBot()
+    listener = _listener(bot, i18n_core, ProgressThrottler(min_interval_seconds=3.0))
+
+    await listener._handle_message(_downloading("umd:progress:r", 61.0))
+    await listener._handle_message(_phase("umd:progress:r", phase))
+
+    assert bot.edits[-1] == (1, 2, i18n_core.get(key, "ru"))
+    assert len(bot.edits) == 2
+
+
+@pytest.mark.asyncio
+async def test_final_state_texts_are_short_and_localized(i18n_core) -> None:
+    assert i18n_core.get("progress-done", "ru") == "✅ Отправлено"
+    assert i18n_core.get("progress-failed", "ru") == "❌ Не удалось"
+    assert i18n_core.get("progress-done", "en") == "✅ Sent"
+    assert i18n_core.get("progress-failed", "en") == "❌ Failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal", ["done", "failed"])
+async def test_terminal_phase_drops_the_throttle_state(i18n_core, terminal: str) -> None:
+    throttler = ProgressThrottler(min_interval_seconds=3.0)
+    listener = _listener(_CapturingBot(), i18n_core, throttler)
+
+    await listener._handle_message(_downloading("umd:progress:r", 10.0))
+    assert "umd:progress:r" in throttler._state
+    await listener._handle_message(_phase("umd:progress:r", terminal))
+
+    assert throttler._state == {}
+
+
+@pytest.mark.asyncio
+async def test_uploading_keeps_the_throttle_state(i18n_core) -> None:
+    # Not terminal: DONE/FAILED still follow and do the cleanup.
+    throttler = ProgressThrottler(min_interval_seconds=3.0)
+    listener = _listener(_CapturingBot(), i18n_core, throttler)
+
+    await listener._handle_message(_downloading("umd:progress:r", 10.0))
+    await listener._handle_message(_phase("umd:progress:r", "uploading"))
+
+    assert "umd:progress:r" in throttler._state
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["from-a-newer-producer", ["unhashable"], None])
+async def test_unknown_phase_reads_as_downloading(i18n_core, phase: object) -> None:
+    bot = _CapturingBot()
+    listener = _listener(bot, i18n_core)
+    payload = {**json.loads(_downloading("c", 40.0)["data"]), "phase": phase}
+
+    await listener._handle_message(_pmessage("umd:progress:r", payload))
+
+    assert bot.edits == [(1, 2, i18n_core.get("progress-downloading", "ru", percent=40))]

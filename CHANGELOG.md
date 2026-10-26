@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `DownloadResult` (path, width, height, duration, title, uploader): `DownloaderPort.download` returns the media facts from yt-dlp's final info (after merge/transcode); `ffprobe` only fills what the info lacks.
 - `DeliverableMedia`: built by `ProcessDownloadUseCase` from the result and the request's spec; `NotifierPort.send_file` takes it instead of a bare path.
+- Progress card final states: `ProgressPhase.UPLOADING` / `DONE` / `FAILED`, published by `ProcessDownloadUseCase` through `ProgressPublisherPort` and rendered unthrottled (`progress-uploading`, `progress-done` "✅ Sent", `progress-failed` "❌ Failed"). The failure reason is still a separate message from the notifier; a failed publish is logged and never fails the delivery.
 
 ### Changed
 
@@ -18,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The progress card stayed on the last percentage ("Downloading… 61%") after the file was delivered (since Day 11B); the listener now also drops the request's throttle state on `DONE` / `FAILED`.
 - Every file was sent with `send_document` since Day 5; inline playback depended on Telegram's own heuristic (a 1080p YouTube video or a `/download` TikTok arrived as a file).
 
 ## [1.1.0] - 2026-10-26

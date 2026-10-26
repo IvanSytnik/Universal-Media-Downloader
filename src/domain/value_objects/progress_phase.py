@@ -14,6 +14,12 @@ compare a plain string decoded from JSON directly against
 ``ProgressPhase.CONVERTING`` without ever constructing an enum member
 from untrusted pubsub data (which would raise on an unknown value from a
 newer producer during a rolling deploy).
+
+Day 11D-2: three one-shot phases after the download itself —
+``UPLOADING`` (the file is being sent to Telegram), then exactly one of
+``DONE`` / ``FAILED``. Like ``CONVERTING`` they carry no byte/percent
+data. ``DONE`` and ``FAILED`` are terminal: no event for the request
+follows them.
 """
 
 from __future__ import annotations
@@ -24,3 +30,6 @@ from enum import StrEnum
 class ProgressPhase(StrEnum):
     DOWNLOADING = "downloading"
     CONVERTING = "converting"
+    UPLOADING = "uploading"
+    DONE = "done"
+    FAILED = "failed"

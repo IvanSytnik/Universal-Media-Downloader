@@ -12,6 +12,13 @@ Day 11B.1: one event kind skips the throttle entirely — a
 boundary (audio path only, see ytdlp_downloader.py), not a point in a
 percent stream, so it always renders (see _handle_message).
 
+Day 11D-2: the same goes for ``uploading`` / ``done`` / ``failed``. The
+last two are terminal — the card gets its short final state and the
+request's throttle state is dropped (one entry per download would
+otherwise accumulate for the life of the bot process). The failure
+reason is not rendered here: it arrives as its own message from the
+worker's notifier.
+
 Explicit locale only (HANDOFF bug #10): there is no aiogram I18nContext
 here — no update is in flight — so every render goes through
 ``i18n_core.get(key, locale, **kwargs)`` with an explicit locale, exactly
@@ -42,6 +49,27 @@ _CHANNEL_PATTERN = "umd:progress:*"
 _MIN_INTERVAL_SECONDS = 3.0
 _MIN_PERCENT_STEP = 5.0
 _NOT_MODIFIED_MARKER = "message is not modified"
+
+# Plain strings decoded from JSON compare against these directly (see
+# ProgressPhase's docstring): an unknown phase from a newer producer is
+# treated as a downloading event, never raises.
+_ONE_SHOT_PHASES = frozenset(
+    {ProgressPhase.CONVERTING, ProgressPhase.UPLOADING, ProgressPhase.DONE, ProgressPhase.FAILED}
+)
+_TERMINAL_PHASES = frozenset({ProgressPhase.DONE, ProgressPhase.FAILED})
+_PHASE_KEYS: dict[str, str] = {
+    ProgressPhase.CONVERTING: "progress-converting",
+    ProgressPhase.UPLOADING: "progress-uploading",
+    ProgressPhase.DONE: "progress-done",
+    ProgressPhase.FAILED: "progress-failed",
+}
+
+
+def _phase_of(payload: dict[str, Any]) -> str:
+    """The payload's phase as a plain string; anything else (missing, or
+    not a string — e.g. unhashable) reads as downloading."""
+    phase = payload.get("phase")
+    return phase if isinstance(phase, str) else ProgressPhase.DOWNLOADING
 
 
 @dataclass
@@ -134,11 +162,14 @@ class TelegramProgressListener:
             logger.warning("progress_listener_bad_payload", channel=channel_key)
             return
 
-        # Day 11B.1: the download→postprocess boundary marker is a
-        # one-shot phase transition, not a repeated percent stream — it
-        # always gets through, bypassing the percent/interval debounce
-        # that exists specifically to throttle a *stream* of updates.
-        if payload.get("phase", ProgressPhase.DOWNLOADING) != ProgressPhase.CONVERTING:
+        # Day 11B.1 / 11D-2: phase markers are one-shot transitions, not
+        # a repeated percent stream — they always get through, bypassing
+        # the percent/interval debounce that exists specifically to
+        # throttle a *stream* of updates.
+        phase = _phase_of(payload)
+        if phase in _TERMINAL_PHASES:
+            self._throttler.discard(channel_key)
+        elif phase not in _ONE_SHOT_PHASES:
             percent = payload.get("percent")
             if not self._throttler.should_emit(channel_key, percent, time.monotonic()):
                 return
@@ -154,8 +185,9 @@ class TelegramProgressListener:
 
     def _format_text(self, payload: dict[str, Any]) -> str:
         locale = payload.get("language") or self._default_locale
-        if payload.get("phase", ProgressPhase.DOWNLOADING) == ProgressPhase.CONVERTING:
-            return self._i18n_core.get("progress-converting", locale)
+        phase_key = _PHASE_KEYS.get(_phase_of(payload))
+        if phase_key is not None:
+            return self._i18n_core.get(phase_key, locale)
 
         percent = payload.get("percent")
         if percent is not None:

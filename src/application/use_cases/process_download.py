@@ -42,6 +42,14 @@ entity. That case gets its own recovery below, which leans on the two
 uuid columns the exception carries out of the failed read. Without it
 the error would escape the job unhandled and the user, whose request
 was already accepted, would simply never hear back (bugs #6 and #13).
+
+Day 11D-2 — the progress card gets a final state. ``UPLOADING`` is
+published before the file goes to Telegram, then ``DONE`` or ``FAILED``
+once the request's status is saved — through the same
+``ProgressPublisherPort``. Pub/sub is fire-and-forget, so the card only
+says "sent" / "failed"; the failure reason still goes out as its own
+message via the notifier, the reliable path. A publish that fails is
+logged and ignored: the card is cosmetic, the delivery is not.
 """
 
 from __future__ import annotations
@@ -65,8 +73,9 @@ from src.domain.interfaces.storage import StoragePort
 from src.domain.interfaces.user_repository import UserRepository
 from src.domain.value_objects.deliverable_media import DeliverableMedia
 from src.domain.value_objects.download_options import DownloadOptions
-from src.domain.value_objects.download_progress import DownloadProgress
+from src.domain.value_objects.download_progress import DownloadProgress, phase_marker
 from src.domain.value_objects.download_spec import spec_kind
+from src.domain.value_objects.progress_phase import ProgressPhase
 from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -132,7 +141,30 @@ class ProcessDownloadUseCase:
             )
         return self._error_localizer.localize(error_key, locale)
 
-    async def _report_corrupted_record(self, exc: CorruptedRecordError) -> None:
+    async def _publish_phase(
+        self,
+        request_id: UUID,
+        chat_id: int,
+        message_id: int,
+        language: str | None,
+        phase: ProgressPhase,
+    ) -> None:
+        """Move the progress card to ``phase``; never fails the job."""
+        try:
+            await self._progress_publisher.publish(
+                request_id, chat_id, message_id, language, phase_marker(phase)
+            )
+        except Exception as exc:  # noqa: BLE001 — the card is cosmetic, see module docstring
+            logger.warning(
+                "process_download_phase_publish_failed",
+                request_id=str(request_id),
+                phase=phase,
+                error=str(exc),
+            )
+
+    async def _report_corrupted_record(
+        self, exc: CorruptedRecordError, chat_id: int, message_id: int
+    ) -> None:
         """Recovery for a row that couldn't be read into an entity.
 
         Marks the request failed by id (``update`` needs the entity we
@@ -157,6 +189,9 @@ class ProcessDownloadUseCase:
         user = await self._user_repository.get_by_id(exc.user_id)
         if user is None or user.telegram_id is None:
             return
+        await self._publish_phase(
+            exc.request_id, chat_id, message_id, user.language, ProgressPhase.FAILED
+        )
         await self._notifier.send_text(
             user.telegram_id,
             self._error_localizer.localize(exc.error_key, user.language),
@@ -166,7 +201,7 @@ class ProcessDownloadUseCase:
         try:
             request = await self._download_request_repository.get_by_id(request_id)
         except CorruptedRecordError as exc:
-            await self._report_corrupted_record(exc)
+            await self._report_corrupted_record(exc, chat_id, message_id)
             return
 
         if request is None:
@@ -215,10 +250,17 @@ class ProcessDownloadUseCase:
             )
             request.mark_failed()
             await self._download_request_repository.update(request)
+            await self._publish_phase(
+                request.id, chat_id, message_id, user.language, ProgressPhase.FAILED
+            )
             await self._notifier.send_text(
                 user.telegram_id, self._localize_failure(exc, user.language)
             )
             return
+
+        await self._publish_phase(
+            request.id, chat_id, message_id, user.language, ProgressPhase.UPLOADING
+        )
 
         try:
             # Day 11D-1: the notifier picks video / audio / document from
@@ -231,6 +273,9 @@ class ProcessDownloadUseCase:
             )
             request.mark_failed()
             await self._download_request_repository.update(request)
+            await self._publish_phase(
+                request.id, chat_id, message_id, user.language, ProgressPhase.FAILED
+            )
             await self._notifier.send_text(
                 user.telegram_id,
                 self._error_localizer.localize("error-delivery-failed", user.language),
@@ -239,4 +284,7 @@ class ProcessDownloadUseCase:
 
         request.mark_done()
         await self._download_request_repository.update(request)
+        await self._publish_phase(
+            request.id, chat_id, message_id, user.language, ProgressPhase.DONE
+        )
         logger.info("process_download_succeeded", request_id=str(request_id))
