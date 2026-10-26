@@ -109,8 +109,16 @@ def test_shared_reliability_options_identical_across_formats() -> None:
         "noplaylist",
         "outtmpl",
         "post_hooks",
+        "noprogress",
     ):
         assert video[key] == audio[key], f"shared option diverged: {key}"
+
+
+def test_progress_bar_is_off_on_both_paths() -> None:
+    # Progress goes through progress_hooks; without `noprogress` yt-dlp
+    # still draws its bar on the worker's stdout despite `quiet`.
+    for fk in (FormatKind.VIDEO, FormatKind.AUDIO):
+        assert _build_download_ydl_opts("/tmp/out", None, fk, _noop_hook)["noprogress"] is True
 
 
 def test_max_filesize_backstop_applied_on_both_paths() -> None:

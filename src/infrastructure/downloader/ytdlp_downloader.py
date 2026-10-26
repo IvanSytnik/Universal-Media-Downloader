@@ -211,6 +211,9 @@ def _build_download_ydl_opts(
     """
     ydl_opts: dict[str, Any] = {
         "quiet": True,
+        # `quiet` alone still draws the progress bar on stdout; progress
+        # reaches the user through `progress_hooks`, so the bar is noise.
+        "noprogress": True,
         "no_warnings": True,
         "noplaylist": True,
         "outtmpl": f"{output_dir}/%(id)s.%(ext)s",
