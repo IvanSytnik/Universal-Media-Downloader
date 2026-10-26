@@ -68,7 +68,9 @@ class TelegramNotifier:
                 f"лимит {limit_mb} МБ)"
             )
 
-        upload = FSInputFile(str(file_path))
+        # The multipart filename is what the recipient sees and saves as;
+        # the file on disk keeps its <id>.<ext> name.
+        upload = FSInputFile(str(file_path), filename=media.filename)
         safe_caption = html_escape(caption) if caption else None
         method = "document"
         try:

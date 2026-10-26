@@ -120,6 +120,38 @@ async def test_caption_is_html_escaped_on_every_method(tmp_path: Path) -> None:
         assert getattr(bot, method).call_args.kwargs["caption"] == "Tom &amp; Jerry"
 
 
+@pytest.mark.parametrize(
+    ("method", "field"),
+    [("send_video", "video"), ("send_audio", "audio"), ("send_document", "document")],
+)
+async def test_upload_is_named_by_the_title_on_every_method(
+    tmp_path: Path, method: str, field: str
+) -> None:
+    path = _file(tmp_path, name="dQw4w9WgXcQ.mp4")
+    media = {
+        "send_video": _video(path, title="Кино: Группа крови"),
+        "send_audio": _audio(path, title="Кино: Группа крови"),
+        "send_document": _video(path, width=None, title="Кино: Группа крови"),
+    }[method]
+    bot = AsyncMock()
+
+    await _notifier(bot).send_file(1, media)
+
+    upload = getattr(bot, method).call_args.kwargs[field]
+    assert upload.filename == "Кино Группа крови.mp4"
+    # The file read from disk is still the id-named one.
+    assert Path(upload.path) == path
+
+
+async def test_upload_without_title_keeps_the_id_name(tmp_path: Path) -> None:
+    path = _file(tmp_path, name="dQw4w9WgXcQ.mp4")
+    bot = AsyncMock()
+
+    await _notifier(bot).send_file(1, _video(path, title=None))
+
+    assert bot.send_video.call_args.kwargs["video"].filename == "dQw4w9WgXcQ.mp4"
+
+
 # --- size ceiling and errors -------------------------------------------------------
 
 

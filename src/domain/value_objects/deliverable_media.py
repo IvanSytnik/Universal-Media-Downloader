@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.domain.value_objects.delivery_filename import delivery_filename
 from src.domain.value_objects.download_result import DownloadResult
 from src.domain.value_objects.format_kind import FormatKind
 
@@ -40,6 +41,12 @@ class DeliverableMedia:
             title=result.title,
             performer=result.uploader,
         )
+
+    @property
+    def filename(self) -> str:
+        """The name the recipient sees: the sanitized title, or the
+        on-disk ``<id>.<ext>`` name when there is no usable title."""
+        return delivery_filename(self.title, self.path)
 
     @property
     def is_playable_video(self) -> bool:
