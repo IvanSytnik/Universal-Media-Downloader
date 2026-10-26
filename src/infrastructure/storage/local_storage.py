@@ -39,7 +39,7 @@ import time
 from pathlib import Path
 from uuid import UUID
 
-from src.shared.logging import get_logger
+from src.shared.logging import describe_error, get_logger
 
 logger = get_logger(__name__)
 
@@ -78,7 +78,7 @@ def _remove(entry: Path) -> bool:
 
     def _on_error(_func: object, path: str, exc: BaseException) -> None:
         if not isinstance(exc, FileNotFoundError):
-            logger.warning("storage_remove_failed", path=path, error=str(exc))
+            logger.warning("storage_remove_failed", path=path, error=describe_error(exc))
 
     try:
         if entry.is_dir() and not entry.is_symlink():
@@ -86,7 +86,7 @@ def _remove(entry: Path) -> bool:
         else:
             entry.unlink(missing_ok=True)
     except OSError as exc:
-        logger.warning("storage_remove_failed", path=str(entry), error=str(exc))
+        logger.warning("storage_remove_failed", path=str(entry), error=describe_error(exc))
     return not os.path.lexists(entry)
 
 

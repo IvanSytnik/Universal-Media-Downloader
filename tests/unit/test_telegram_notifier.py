@@ -12,6 +12,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 from aiogram.exceptions import TelegramAPIError
+from aiogram.methods import SendAudio, SendDocument, SendVideo
+from aiogram.methods.base import TelegramMethod
+from aiogram.types import Message
 
 from src.domain.exceptions import NotifierError
 from src.domain.value_objects.deliverable_media import DeliverableMedia
@@ -182,7 +185,12 @@ async def test_send_file_respects_injected_limit_not_a_hardcoded_one(tmp_path: P
 @pytest.mark.parametrize("method", ["send_video", "send_audio", "send_document"])
 async def test_telegram_api_error_is_wrapped_for_every_method(tmp_path: Path, method: str) -> None:
     bot = AsyncMock()
-    getattr(bot, method).side_effect = TelegramAPIError(method=method, message="boom")
+    api_method: TelegramMethod[Message] = {
+        "send_video": SendVideo(chat_id=1, video="v"),
+        "send_audio": SendAudio(chat_id=1, audio="a"),
+        "send_document": SendDocument(chat_id=1, document="d"),
+    }[method]
+    getattr(bot, method).side_effect = TelegramAPIError(method=api_method, message="boom")
     path = _file(tmp_path)
     media = {
         "send_video": _video(path),

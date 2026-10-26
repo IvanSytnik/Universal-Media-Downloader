@@ -93,7 +93,7 @@ from src.domain.value_objects.download_options import DownloadOptions
 from src.domain.value_objects.download_progress import DownloadProgress, phase_marker
 from src.domain.value_objects.download_spec import spec_kind
 from src.domain.value_objects.progress_phase import ProgressPhase
-from src.shared.logging import get_logger
+from src.shared.logging import describe_error, get_logger
 
 logger = get_logger(__name__)
 
@@ -181,7 +181,7 @@ class ProcessDownloadUseCase:
                 "process_download_phase_publish_failed",
                 request_id=str(request_id),
                 phase=phase,
-                error=str(exc),
+                error=describe_error(exc),
             )
 
     async def _report_corrupted_record(
@@ -325,7 +325,7 @@ class ProcessDownloadUseCase:
                 "process_download_failed",
                 request_id=str(request_id),
                 error_key=getattr(exc, "error_key", None),
-                error=str(exc),
+                error=describe_error(exc),
             )
             await self._fail(
                 request,
@@ -348,7 +348,9 @@ class ProcessDownloadUseCase:
             await self._notifier.send_file(telegram_id, media)
         except NotifierError as exc:
             logger.warning(
-                "process_download_delivery_failed", request_id=str(request_id), error=str(exc)
+                "process_download_delivery_failed",
+                request_id=str(request_id),
+                error=describe_error(exc),
             )
             await self._fail(
                 request,

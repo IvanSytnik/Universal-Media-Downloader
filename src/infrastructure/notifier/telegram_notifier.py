@@ -31,7 +31,7 @@ from aiogram.types import FSInputFile
 
 from src.domain.exceptions import NotifierError
 from src.domain.value_objects.deliverable_media import DeliverableMedia
-from src.shared.logging import get_logger
+from src.shared.logging import describe_error, get_logger
 
 logger = get_logger(__name__)
 
@@ -107,7 +107,10 @@ class TelegramNotifier:
                 )
         except TelegramAPIError as exc:
             logger.warning(
-                "notifier_send_file_failed", telegram_id=telegram_id, method=method, error=str(exc)
+                "notifier_send_file_failed",
+                telegram_id=telegram_id,
+                method=method,
+                error=describe_error(exc),
             )
             raise NotifierError(str(exc)) from exc
         logger.info("notifier_file_sent", telegram_id=telegram_id, method=method)
@@ -116,5 +119,7 @@ class TelegramNotifier:
         try:
             await self._bot.send_message(chat_id=telegram_id, text=html_escape(text))
         except TelegramAPIError as exc:
-            logger.warning("notifier_send_text_failed", telegram_id=telegram_id, error=str(exc))
+            logger.warning(
+                "notifier_send_text_failed", telegram_id=telegram_id, error=describe_error(exc)
+            )
             raise NotifierError(str(exc)) from exc

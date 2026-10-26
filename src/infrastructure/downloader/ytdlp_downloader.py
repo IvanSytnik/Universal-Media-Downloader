@@ -194,7 +194,7 @@ from src.domain.value_objects.format_kind import FormatKind
 from src.domain.value_objects.media_preview import MediaPreview
 from src.domain.value_objects.progress_phase import ProgressPhase
 from src.infrastructure.downloader.error_classifier import classify_error
-from src.shared.logging import get_logger
+from src.shared.logging import describe_error, get_logger
 
 logger = get_logger(__name__)
 
@@ -1056,17 +1056,22 @@ class YtDlpDownloader:
                 None, _run_preview_in_process, url, self._preview_timeout_seconds
             )
         except _PreviewTimeoutError as exc:
-            logger.warning("preview_extraction_failed", url=url, error=str(exc), reason="timeout")
+            logger.warning(
+                "preview_extraction_failed", url=url, error=describe_error(exc), reason="timeout"
+            )
             raise PreviewTimeoutError from exc
         except _DownloadExtractError as exc:
             # Log the full diagnostic message, then raise a CATEGORIZED
             # domain error carrying only a semantic key — never the raw
             # text (bug #6).
-            logger.warning("preview_extraction_failed", url=url, error=str(exc))
+            logger.warning("preview_extraction_failed", url=url, error=describe_error(exc))
             _raise_classified(str(exc), url)
         except _DownloadProcessError as exc:
             logger.warning(
-                "preview_extraction_failed", url=url, error=str(exc), reason="process_error"
+                "preview_extraction_failed",
+                url=url,
+                error=describe_error(exc),
+                reason="process_error",
             )
             raise ExtractionError from exc
 
@@ -1130,12 +1135,14 @@ class YtDlpDownloader:
                 progress_sink,
             )
         except _DownloadTimeoutError as exc:
-            logger.warning("download_failed", url=url, error=str(exc), reason="timeout")
+            logger.warning("download_failed", url=url, error=describe_error(exc), reason="timeout")
             # Timeout has its own dedicated key — it's neither a content
             # problem nor a generic extraction failure.
             raise DownloadTimeoutError from exc
         except _FileTooLargeError as exc:
-            logger.warning("download_failed", url=url, error=str(exc), reason="too_large")
+            logger.warning(
+                "download_failed", url=url, error=describe_error(exc), reason="too_large"
+            )
             # Domain FileTooLargeError carries the numbers as localizable
             # arguments (error-too-large FTL key), not a pre-baked string.
             raise FileTooLargeError(estimated_mb=exc.estimated_mb, limit_mb=exc.limit_mb) from exc
@@ -1143,13 +1150,17 @@ class YtDlpDownloader:
             # A yt-dlp failure during the real download — classify it into
             # the same domain categories the preview path uses. Raw text
             # to the log only.
-            logger.warning("download_failed", url=url, error=str(exc), reason="extract_error")
+            logger.warning(
+                "download_failed", url=url, error=describe_error(exc), reason="extract_error"
+            )
             _raise_classified(str(exc), url)
         except _DownloadProcessError as exc:
             # `str(exc)` here may be a diagnostic-rich message (container
             # paths, yt-dlp internals, occasionally signed CDN URLs) —
             # that belongs in the log, not in a message sent to the user.
-            logger.warning("download_failed", url=url, error=str(exc), reason="process_error")
+            logger.warning(
+                "download_failed", url=url, error=describe_error(exc), reason="process_error"
+            )
             raise ExtractionError from exc
         finally:
             # `_run_download_in_process` itself sends the None stop

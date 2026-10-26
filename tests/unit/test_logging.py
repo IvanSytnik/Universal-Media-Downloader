@@ -24,6 +24,7 @@ from src.shared.logging import (
     bind_log_context,
     clear_log_context,
     configure_logging,
+    describe_error,
     get_logger,
 )
 
@@ -160,3 +161,17 @@ async def test_bound_context_stays_inside_its_task() -> None:
 
     assert seen == {"a": {"request_id": "a"}, "b": {"request_id": "b"}}
     assert "request_id" not in structlog.contextvars.get_contextvars()
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    [
+        (ValueError("bad value"), "bad value"),
+        (ValueError("  padded\n"), "padded"),
+        (ValueError(), "ValueError"),
+        (ValueError("   "), "ValueError"),
+        (KeyError(""), "''"),
+    ],
+)
+def test_describe_error_never_logs_an_empty_string(exc: BaseException, expected: str) -> None:
+    assert describe_error(exc) == expected

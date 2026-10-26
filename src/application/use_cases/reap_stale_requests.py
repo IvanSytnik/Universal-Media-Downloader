@@ -31,7 +31,7 @@ from src.domain.interfaces.error_localizer import ErrorLocalizerPort
 from src.domain.interfaces.notifier import NotifierPort
 from src.domain.interfaces.user_repository import UserRepository
 from src.domain.value_objects.stale_request import StaleRequest
-from src.shared.logging import get_logger
+from src.shared.logging import describe_error, get_logger
 
 logger = get_logger(__name__)
 
@@ -86,5 +86,5 @@ class ReapStaleRequestsUseCase:
             logger.warning(
                 "stale_request_notify_failed",
                 request_id=str(stale.request_id),
-                error=str(exc),
+                error=describe_error(exc),
             )

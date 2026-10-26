@@ -186,6 +186,22 @@ async def test_diagnostics_go_to_the_log_and_not_to_the_user() -> None:
 
 
 @pytest.mark.asyncio
+async def test_messageless_classified_error_still_logs_what_failed() -> None:
+    """Backlog regression: `_raise_classified` raises the domain error
+    with no message (bug #6), so a deleted YouTube video logged
+    `error=""`. The class name now stands in for the missing text."""
+    request = DownloadRequest.create(user_id=uuid4(), source_url="https://example.com/x")
+
+    with structlog.testing.capture_logs() as logs:
+        await _use_case(
+            _Repo(request), _Notifier(), _FailingDownloader(PrivateContentError())
+        ).execute(request.id, chat_id=1, message_id=2)
+
+    logged = [entry for entry in logs if entry["event"] == "process_download_failed"][0]
+    assert logged["error"] == "PrivateContentError"
+
+
+@pytest.mark.asyncio
 async def test_corrupted_record_logs_the_column_and_the_raw_value() -> None:
     # The whole point of this line: find the bad row afterwards.
     request_id, user_id = uuid4(), uuid4()

@@ -126,7 +126,7 @@ def configure_logging(
 
     if file_error is not None:
         get_logger(__name__).warning(
-            "log_file_unavailable", log_dir=str(log_dir), error=str(file_error)
+            "log_file_unavailable", log_dir=str(log_dir), error=describe_error(file_error)
         )
 
 
@@ -139,6 +139,14 @@ def bind_log_context(**values: str) -> None:
 def clear_log_context() -> None:
     """Start a unit of work (a job) with no context left over."""
     structlog.contextvars.clear_contextvars()
+
+
+def describe_error(exc: BaseException) -> str:
+    """The ``error=`` field of a log line: the exception's text, or its
+    class name when the text is empty. Classified domain errors are
+    raised without a message (bug #6), so ``str(exc)`` alone logs
+    ``error=""`` and the line says nothing."""
+    return str(exc).strip() or type(exc).__name__
 
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:

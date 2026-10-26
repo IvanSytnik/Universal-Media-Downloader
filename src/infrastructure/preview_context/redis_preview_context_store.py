@@ -28,7 +28,7 @@ import uuid
 from redis.asyncio import Redis
 
 from src.domain.value_objects.preview_context import PreviewContext
-from src.shared.logging import get_logger
+from src.shared.logging import describe_error, get_logger
 
 _KEY_PREFIX = "umd:preview:"
 
@@ -62,7 +62,7 @@ def _decode(token: str, value: bytes | str | None) -> PreviewContext | None:
             max_compatible_short_side=side,
         )
     except (ValueError, KeyError, TypeError) as exc:
-        logger.warning("preview_context_unreadable", token=token, error=str(exc))
+        logger.warning("preview_context_unreadable", token=token, error=describe_error(exc))
         return None
 
 

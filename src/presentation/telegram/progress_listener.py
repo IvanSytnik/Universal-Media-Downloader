@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any
 from aiogram.exceptions import TelegramBadRequest
 
 from src.domain.value_objects.progress_phase import ProgressPhase
-from src.shared.logging import get_logger
+from src.shared.logging import describe_error, get_logger
 
 if TYPE_CHECKING:
     from aiogram import Bot
@@ -213,5 +213,8 @@ class TelegramProgressListener:
             # telling us the edit is a no-op.
             if _NOT_MODIFIED_MARKER not in str(exc).lower():
                 logger.warning(
-                    "progress_edit_failed", chat_id=chat_id, message_id=message_id, error=str(exc)
+                    "progress_edit_failed",
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    error=describe_error(exc),
                 )
