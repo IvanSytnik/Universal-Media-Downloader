@@ -92,7 +92,7 @@ async def main() -> None:
     use_cases = SqlAlchemyUseCaseProvider(
         session_factory=session_factory,
         task_queue=ArqTaskQueue(arq_pool),
-        downloader=YtDlpDownloader(),
+        downloader=YtDlpDownloader(preview_timeout_seconds=settings.preview_timeout_seconds),
         format_policy=format_policy,
     )
 

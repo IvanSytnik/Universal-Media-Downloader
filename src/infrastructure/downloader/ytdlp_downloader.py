@@ -5,9 +5,10 @@ wrapper — decided in PROJECT_SPEC §6.4.
 
 **Why `download()` spawns a fresh process per call (Day 5):**
 
-`get_preview()` (Day 4) runs `extract_info` in the default thread pool —
-fine for a quick metadata lookup. Real downloads are long-running and
-must be cancellable with a hard guarantee: if a download hangs (dead
+`get_preview()` (Day 4) ran `extract_info` in the default thread pool —
+fine for a quick metadata lookup, until it isn't (see "Preview timeout"
+below: it now runs in a child process too). Real downloads are
+long-running and must be cancellable with a hard guarantee: if a download hangs (dead
 peer, yt-dlp bug, huge playlist misdetected as single video), the worker
 must be able to kill it, not wait forever.
 
@@ -127,6 +128,30 @@ the merge/transcode, so for ``bv*+ba`` they describe the merged file —
 and runs ``ffprobe`` on the file only when info lacks one of them. They
 travel back on the result queue as a JSON payload and come out of
 ``download()`` as a ``DownloadResult``.
+
+**Preview timeout (ops minimum before beta).** yt-dlp's
+``socket_timeout``/``retries`` bound each request, not the extraction:
+a source that drips bytes, or DNS that never answers (``getaddrinfo``
+ignores ``socket_timeout``), kept ``extract_info`` — and the executor
+thread under it — busy indefinitely. The pool is bounded and, since Day
+11C v2, ``/download`` goes through the preview too, so a few stalled
+links starved the whole bot. A thread can't be killed, so the preview
+now gets the same kill switch as the download: a child process,
+``terminate()``'d (then ``kill()``'d) after ``preview_timeout_seconds``
+— ``_collect_preview_result``, pinned by a real-process test.
+
+The context is ``forkserver``, not ``spawn``: the bot runs as
+``python -m src.main`` and a spawned child re-imports that whole module
+(aiogram, SQLAlchemy, … — about 2 s) before doing anything. The
+forkserver preloads this module and the parent's main module once (see
+``_forkserver_preload``), so each preview child is a cheap fork of a
+process that already has all of it imported. The download path keeps
+``spawn``: it runs once per job in the worker, where a fraction of a
+second is noise.
+
+The child sends back only the preview facts (``_preview_facts``), never
+yt-dlp's info dict — the full format list of a YouTube video is large
+enough to make pickling it a cost of its own.
 """
 
 from __future__ import annotations
@@ -138,6 +163,7 @@ import multiprocessing
 import os
 import queue
 import subprocess
+import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -149,6 +175,7 @@ from src.domain.exceptions import (
     DownloadTimeoutError,
     ExtractionError,
     FileTooLargeError,
+    PreviewTimeoutError,
 )
 from src.domain.interfaces.downloader import ProgressCallback
 from src.domain.value_objects.download_options import DownloadOptions
@@ -227,11 +254,45 @@ def _video_tier_value(spec: DownloadSpec) -> str | None:
 
 
 def _extract_info_sync(url: str) -> dict[str, Any] | None:
-    """Runs on a worker thread — see get_preview(). Never call directly
-    from async code."""
+    """Runs in the preview child process — see _preview_worker_entrypoint.
+    Never call directly from async code."""
     with yt_dlp.YoutubeDL(_YDL_OPTS_PREVIEW) as ydl:
         info = ydl.extract_info(url, download=False)
         return dict(info) if info is not None else None
+
+
+def _preview_facts(info: dict[str, Any]) -> dict[str, Any]:
+    """The subset of yt-dlp's info that ``get_preview`` needs, as
+    primitives — computed in the child, so the format list never crosses
+    the process boundary."""
+    return {
+        "title": info.get("title"),
+        "duration": info.get("duration"),
+        "uploader": info.get("uploader"),
+        "thumbnail": info.get("thumbnail"),
+        "media_type": _guess_media_type(info).value,
+        "extractor_key": str(info.get("extractor_key") or "").lower(),
+        "max_compatible_short_side": _max_compatible_short_side(info.get("formats") or []),
+    }
+
+
+def _preview_worker_entrypoint(
+    url: str, result_queue: multiprocessing.Queue[tuple[str, Any]]
+) -> None:
+    """Child process entrypoint. Puts exactly one item on ``result_queue``:
+    ``("ok", facts)``, ``("empty", None)`` when yt-dlp returned no info,
+    ``("extract_error", message)`` for a yt-dlp ``DownloadError``, or
+    ``("error", message)`` for anything else."""
+    try:
+        info = _extract_info_sync(url)
+        if info is None:
+            result_queue.put(("empty", None))
+        else:
+            result_queue.put(("ok", _preview_facts(info)))
+    except yt_dlp.utils.DownloadError as exc:
+        result_queue.put(("extract_error", str(exc)))
+    except Exception as exc:
+        result_queue.put(("error", f"{type(exc).__name__}: {exc}"))
 
 
 def _guess_media_type(info: dict[str, Any]) -> MediaType:
@@ -349,6 +410,10 @@ class _DownloadProcessError(Exception):
     """Internal — raised by _run_download_in_process, caught by download().
     Carries a diagnostic-rich message meant for logs, not for the end
     user directly (see download()'s exception mapping)."""
+
+
+class _PreviewTimeoutError(Exception):
+    """Internal — raised by _collect_preview_result, caught by get_preview()."""
 
 
 class _DownloadExtractError(Exception):
@@ -763,6 +828,103 @@ def _wait_and_drain_progress(
     process.join()  # already exited — reap the zombie, effectively instant
 
 
+def _stop_process(process: multiprocessing.process.BaseProcess) -> None:
+    """SIGTERM, then SIGKILL if the child is still there 5 s later — the
+    executor thread waiting on it must come back in bounded time."""
+    process.terminate()
+    process.join(5)
+    if process.is_alive():
+        process.kill()
+        process.join()
+
+
+def _collect_preview_result(
+    process: multiprocessing.process.BaseProcess,
+    result_queue: multiprocessing.Queue[tuple[str, Any]],
+    timeout_seconds: float,
+) -> tuple[str, Any]:
+    """Blocks the CALLING thread (an executor thread) until the preview
+    child reports its one result or ``timeout_seconds`` elapses. On
+    timeout the child is stopped and ``_PreviewTimeoutError`` raised; a
+    child that exits without a result raises ``_DownloadProcessError``
+    right away instead of waiting out the timeout.
+
+    Reads the queue BEFORE joining: a child whose queued item hasn't been
+    flushed into the pipe can't exit, so join-then-read can deadlock.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while (remaining := deadline - time.monotonic()) > 0:
+        try:
+            item = result_queue.get(timeout=min(0.5, remaining))
+        except queue.Empty:
+            if process.is_alive():
+                continue
+            # Exited. A child flushes its queue before it exits, so a
+            # result it did put is in the pipe by now.
+            try:
+                item = result_queue.get(timeout=0.1)
+            except queue.Empty:
+                process.join()
+                raise _DownloadProcessError(
+                    f"Процесс превью завершился без результата (exit code {process.exitcode})"
+                ) from None
+        process.join(5)
+        if process.is_alive():
+            _stop_process(process)
+        return item
+
+    _stop_process(process)
+    raise _PreviewTimeoutError(f"Превью превысило лимит {timeout_seconds} секунд и было прервано")
+
+
+def _forkserver_preload() -> list[str]:
+    """Every forkserver child still re-runs the parent's main module
+    (multiprocessing's "main fixup", same as spawn). Preloading that
+    module too leaves the re-run only its top-level definitions to do —
+    its imports are already in the server."""
+    main_spec = getattr(sys.modules["__main__"], "__spec__", None)
+    main_name = getattr(main_spec, "name", None)
+    if main_name is None or main_name.endswith("__main__"):
+        # A script (or `python -m pkg`): the forkserver loads it by path.
+        main_name = "__main__"
+    return [main_name, __name__]
+
+
+def _preview_context() -> multiprocessing.context.ForkServerContext:
+    ctx = multiprocessing.get_context("forkserver")
+    # Takes effect when the forkserver starts (the first preview); later
+    # calls change nothing. See the module docstring for why not spawn.
+    ctx.set_forkserver_preload(_forkserver_preload())
+    return ctx
+
+
+class RunPreviewInProcess(Protocol):
+    """The call shape of ``_run_preview_in_process`` — same purpose as
+    ``RunDownloadInProcess`` below."""
+
+    def __call__(self, url: str, timeout_seconds: int, /) -> dict[str, Any] | None: ...
+
+
+def _run_preview_in_process(url: str, timeout_seconds: int) -> dict[str, Any] | None:
+    """Blocking. Must only be called via loop.run_in_executor(). Returns
+    the preview facts, or None when yt-dlp found nothing."""
+    ctx = _preview_context()
+    result_queue: multiprocessing.Queue[tuple[str, Any]] = ctx.Queue()
+    process = ctx.Process(target=_preview_worker_entrypoint, args=(url, result_queue))
+    process.start()
+
+    status, payload = _collect_preview_result(process, result_queue, timeout_seconds)
+    if status == "extract_error":
+        raise _DownloadExtractError(payload)
+    if status == "error":
+        raise _DownloadProcessError(payload)
+    facts: dict[str, Any] | None = payload
+    return facts
+
+
+_PREVIEW_RUNNER_CONTRACT: RunPreviewInProcess = _run_preview_in_process
+
+
 class RunDownloadInProcess(Protocol):
     """The exact call shape of ``_run_download_in_process`` — positional,
     because ``run_in_executor`` passes it that way.
@@ -883,34 +1045,47 @@ async def _drain_bridge(
 
 
 class YtDlpDownloader:
+    def __init__(self, *, preview_timeout_seconds: int) -> None:
+        self._preview_timeout_seconds = preview_timeout_seconds
+
     async def get_preview(self, url: str) -> MediaPreview:
         loop = asyncio.get_running_loop()
 
         try:
-            info = await loop.run_in_executor(None, _extract_info_sync, url)
-        except yt_dlp.utils.DownloadError as exc:
+            facts = await loop.run_in_executor(
+                None, _run_preview_in_process, url, self._preview_timeout_seconds
+            )
+        except _PreviewTimeoutError as exc:
+            logger.warning("preview_extraction_failed", url=url, error=str(exc), reason="timeout")
+            raise PreviewTimeoutError from exc
+        except _DownloadExtractError as exc:
             # Log the full diagnostic message, then raise a CATEGORIZED
             # domain error carrying only a semantic key — never the raw
             # text (bug #6).
             logger.warning("preview_extraction_failed", url=url, error=str(exc))
             _raise_classified(str(exc), url)
+        except _DownloadProcessError as exc:
+            logger.warning(
+                "preview_extraction_failed", url=url, error=str(exc), reason="process_error"
+            )
+            raise ExtractionError from exc
 
-        if info is None:
+        if facts is None:
             logger.warning("preview_extraction_empty_result", url=url)
             raise ExtractionError
 
         return MediaPreview(
             source_url=url,
-            title=info.get("title") or "Без названия",
-            duration_seconds=info.get("duration"),
-            uploader=info.get("uploader"),
-            thumbnail_url=info.get("thumbnail"),
-            media_type=_guess_media_type(info),
+            title=facts["title"] or "Без названия",
+            duration_seconds=facts["duration"],
+            uploader=facts["uploader"],
+            thumbnail_url=facts["thumbnail"],
+            media_type=MediaType(facts["media_type"]),
             # Day 11C (v2): both from the extractor's own result — the
             # preview is the only trusted source for them (see
             # PreviewContext).
-            extractor_key=str(info.get("extractor_key") or "").lower(),
-            max_compatible_short_side=_max_compatible_short_side(info.get("formats") or []),
+            extractor_key=facts["extractor_key"],
+            max_compatible_short_side=facts["max_compatible_short_side"],
         )
 
     async def download(

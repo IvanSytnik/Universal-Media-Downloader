@@ -115,6 +115,15 @@ class DownloadTimeoutError(ExtractionError):
     error_key = "error-timeout"
 
 
+class PreviewTimeoutError(ExtractionError):
+    """Fetching the preview exceeded its overall time limit and the
+    extraction was killed. Its own key, not ``error-timeout``: nothing
+    was being downloaded yet, so "the download took too long" would be
+    wrong — the user should just try again a bit later."""
+
+    error_key = "error-preview-timeout"
+
+
 class FileTooLargeError(ExtractionError):
     """The media exceeds the deliverable size limit. Unlike the other
     categories, this carries data (the estimated size and the limit, in

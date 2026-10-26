@@ -100,3 +100,21 @@ def test_disabled_formats_rejects_unknown_kind(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("DISABLED_FORMATS", '{"youtube": ["mp3"]}')
     with pytest.raises(ValidationError):
         Settings(bot_token="t", _env_file=None)  # type: ignore[arg-type, call-arg]
+
+
+def test_preview_timeout_defaults_to_60_seconds() -> None:
+    settings = Settings(
+        bot_token="test-token",  # type: ignore[arg-type]
+        _env_file=None,  # type: ignore[call-arg]
+    )
+
+    assert settings.preview_timeout_seconds == 60
+
+
+def test_preview_timeout_must_be_positive() -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            bot_token="test-token",  # type: ignore[arg-type]
+            preview_timeout_seconds=0,
+            _env_file=None,  # type: ignore[call-arg]
+        )

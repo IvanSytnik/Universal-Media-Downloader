@@ -251,7 +251,7 @@ async def test_download_failure_logs_a_reason_and_the_raw_text(
     monkeypatch.setattr(ytdlp_downloader, "_run_download_in_process", _raise)
 
     with structlog.testing.capture_logs() as logs, pytest.raises(expected_domain_error):
-        await YtDlpDownloader().download(
+        await YtDlpDownloader(preview_timeout_seconds=60).download(
             "https://example.com/v", DownloadOptions(output_dir=tmp_path)
         )
 
@@ -272,7 +272,7 @@ async def test_file_too_large_logs_reason_and_still_carries_numbers(
     monkeypatch.setattr(ytdlp_downloader, "_run_download_in_process", _raise)
 
     with structlog.testing.capture_logs() as logs, pytest.raises(FileTooLargeError) as caught:
-        await YtDlpDownloader().download(
+        await YtDlpDownloader(preview_timeout_seconds=60).download(
             "https://example.com/v", DownloadOptions(output_dir=tmp_path)
         )
 
@@ -297,7 +297,7 @@ async def test_success_is_logged_with_the_resulting_path(
     )
 
     with structlog.testing.capture_logs() as logs:
-        await YtDlpDownloader().download(
+        await YtDlpDownloader(preview_timeout_seconds=60).download(
             "https://example.com/v", DownloadOptions(output_dir=tmp_path)
         )
 

@@ -1,8 +1,18 @@
-"""YtDlpDownloader tests. `_extract_info_sync` is monkeypatched so these
-tests never touch the network or a real yt-dlp extraction — they check
-the adapter's own logic: mapping yt-dlp's info dict to MediaPreview,
-media-type guessing, and exception translation (yt_dlp exceptions must
-never leak past this module — see module docstring in ytdlp_downloader.py).
+"""YtDlpDownloader tests. The process runners (`_run_preview_in_process`,
+`_run_download_in_process`) are monkeypatched so these tests never touch
+the network or a real yt-dlp extraction — they check the adapter's own
+logic: mapping yt-dlp's info dict to MediaPreview, media-type guessing,
+and exception translation (yt_dlp exceptions must never leak past this
+module — see module docstring in ytdlp_downloader.py).
+
+Preview timeout: the preview extraction moved into a child process, so
+patching `_extract_info_sync` in the test process no longer reaches it.
+Preview stand-ins replace `_run_preview_in_process` instead (typed
+against `RunPreviewInProcess`) and return what the child would send —
+`_preview_facts(info)` — so the info → facts mapping is still exercised.
+The child's own logic is tested by calling `_preview_worker_entrypoint`
+in-process; the kill switch, against real processes, in
+test_preview_kill_mechanism.py.
 
 Day 10: exception translation now produces CATEGORIZED domain errors
 carrying a semantic ``error_key`` instead of a user-facing text string.
@@ -46,6 +56,7 @@ from src.domain.exceptions import (
     DownloadTimeoutError,
     ExtractionError,
     FileTooLargeError,
+    PreviewTimeoutError,
 )
 from src.domain.value_objects.download_options import DownloadOptions
 from src.domain.value_objects.download_progress import DownloadProgress
@@ -64,14 +75,35 @@ from src.domain.value_objects.progress_phase import ProgressPhase
 from src.infrastructure.downloader import ytdlp_downloader
 from src.infrastructure.downloader.ytdlp_downloader import (
     RunDownloadInProcess,
+    RunPreviewInProcess,
     YtDlpDownloader,
 )
 
 _Sink = Callable[[dict[str, Any] | None], None] | None
 
+_PREVIEW_TIMEOUT = 45
+
+
+def _downloader() -> YtDlpDownloader:
+    return YtDlpDownloader(preview_timeout_seconds=_PREVIEW_TIMEOUT)
+
 
 def _install_runner(monkeypatch: pytest.MonkeyPatch, runner: RunDownloadInProcess) -> None:
     monkeypatch.setattr(ytdlp_downloader, "_run_download_in_process", runner)
+
+
+def _install_preview_runner(monkeypatch: pytest.MonkeyPatch, runner: RunPreviewInProcess) -> None:
+    monkeypatch.setattr(ytdlp_downloader, "_run_preview_in_process", runner)
+
+
+def _install_preview_info(monkeypatch: pytest.MonkeyPatch, info: dict[str, Any] | None) -> None:
+    """Stand-in for a child that extracted ``info`` (None: yt-dlp found
+    nothing)."""
+
+    def _run(url: str, timeout_seconds: int, /) -> dict[str, Any] | None:
+        return ytdlp_downloader._preview_facts(info) if info is not None else None
+
+    _install_preview_runner(monkeypatch, _run)
 
 
 @pytest.mark.asyncio
@@ -84,9 +116,9 @@ async def test_get_preview_maps_info_dict_to_media_preview(monkeypatch: pytest.M
         "vcodec": "h264",
         "acodec": "aac",
     }
-    monkeypatch.setattr(ytdlp_downloader, "_extract_info_sync", lambda url: fake_info)
+    _install_preview_info(monkeypatch, fake_info)
 
-    downloader = YtDlpDownloader()
+    downloader = _downloader()
     preview = await downloader.get_preview("https://example.com/video")
 
     assert preview.source_url == "https://example.com/video"
@@ -99,9 +131,9 @@ async def test_get_preview_maps_info_dict_to_media_preview(monkeypatch: pytest.M
 
 @pytest.mark.asyncio
 async def test_get_preview_falls_back_to_default_title(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ytdlp_downloader, "_extract_info_sync", lambda url: {})
+    _install_preview_info(monkeypatch, {})
 
-    downloader = YtDlpDownloader()
+    downloader = _downloader()
     preview = await downloader.get_preview("https://example.com/video")
 
     assert preview.title == "Без названия"
@@ -113,21 +145,23 @@ async def test_get_preview_falls_back_to_default_title(monkeypatch: pytest.Monke
 async def test_get_preview_raises_extraction_error_on_none_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(ytdlp_downloader, "_extract_info_sync", lambda url: None)
+    _install_preview_info(monkeypatch, None)
 
-    downloader = YtDlpDownloader()
+    downloader = _downloader()
     with pytest.raises(ExtractionError):
         await downloader.get_preview("https://example.com/video")
 
 
 @pytest.mark.asyncio
 async def test_get_preview_wraps_ytdlp_download_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _raise(url: str) -> dict[str, Any]:
-        raise yt_dlp.utils.DownloadError("Video unavailable")
+    def _raise(url: str, timeout_seconds: int, /) -> dict[str, Any] | None:
+        # What the runner raises when the child reported a yt-dlp
+        # DownloadError with this message.
+        raise ytdlp_downloader._DownloadExtractError("Video unavailable")
 
-    monkeypatch.setattr(ytdlp_downloader, "_extract_info_sync", _raise)
+    _install_preview_runner(monkeypatch, _raise)
 
-    downloader = YtDlpDownloader()
+    downloader = _downloader()
     # "Video unavailable" classifies to ContentUnavailableError, an
     # ExtractionError subclass — still caught as ExtractionError.
     with pytest.raises(ExtractionError) as exc_info:
@@ -135,6 +169,123 @@ async def test_get_preview_wraps_ytdlp_download_error(monkeypatch: pytest.Monkey
     # Categorized, and no raw yt-dlp text leaked to the user-facing str.
     assert exc_info.value.error_key == "error-unavailable"
     assert "Video unavailable" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_get_preview_passes_configured_timeout_to_runner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[tuple[str, int]] = []
+
+    def _run(url: str, timeout_seconds: int, /) -> dict[str, Any] | None:
+        seen.append((url, timeout_seconds))
+        return ytdlp_downloader._preview_facts({"title": "t"})
+
+    _install_preview_runner(monkeypatch, _run)
+
+    await YtDlpDownloader(preview_timeout_seconds=7).get_preview("https://example.com/v")
+
+    assert seen == [("https://example.com/v", 7)]
+
+
+@pytest.mark.asyncio
+async def test_get_preview_maps_timeout_to_preview_timeout_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise(url: str, timeout_seconds: int, /) -> dict[str, Any] | None:
+        raise ytdlp_downloader._PreviewTimeoutError("превысило лимит 45 секунд")
+
+    _install_preview_runner(monkeypatch, _raise)
+
+    with pytest.raises(PreviewTimeoutError) as exc_info:
+        await _downloader().get_preview("https://example.com/video")
+    # Its own key — "the download took too long" would be wrong here —
+    # and still an ExtractionError, so every preview handler catches it.
+    assert exc_info.value.error_key == "error-preview-timeout"
+    assert isinstance(exc_info.value, ExtractionError)
+    assert str(exc_info.value) == ""
+
+
+@pytest.mark.asyncio
+async def test_get_preview_maps_process_error_to_generic_extraction_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise(url: str, timeout_seconds: int, /) -> dict[str, Any] | None:
+        raise ytdlp_downloader._DownloadProcessError("RuntimeError: /secret/path")
+
+    _install_preview_runner(monkeypatch, _raise)
+
+    with pytest.raises(ExtractionError) as exc_info:
+        await _downloader().get_preview("https://example.com/video")
+    assert type(exc_info.value) is ExtractionError
+    assert "/secret/path" not in str(exc_info.value)
+
+
+class _ListQueue:
+    """Stands in for the child's result queue when the entrypoint runs
+    in-process."""
+
+    def __init__(self) -> None:
+        self.items: list[tuple[str, Any]] = []
+
+    def put(self, item: tuple[str, Any]) -> None:
+        self.items.append(item)
+
+
+def _run_entrypoint(
+    monkeypatch: pytest.MonkeyPatch, extract: Callable[[str], dict[str, Any] | None]
+) -> list[tuple[str, Any]]:
+    monkeypatch.setattr(ytdlp_downloader, "_extract_info_sync", extract)
+    result_queue = _ListQueue()
+    ytdlp_downloader._preview_worker_entrypoint("https://example.com/v", result_queue)  # type: ignore[arg-type]
+    return result_queue.items
+
+
+def test_preview_entrypoint_sends_facts_not_the_info_dict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    info: dict[str, Any] = {
+        "title": "t",
+        "extractor_key": "Youtube",
+        "vcodec": "avc1.640028",
+        "formats": [{"vcodec": "avc1.640028", "width": 1920, "height": 1080}],
+        "huge_field": "x" * 10_000,
+    }
+
+    items = _run_entrypoint(monkeypatch, lambda url: info)
+
+    assert items == [
+        (
+            "ok",
+            {
+                "title": "t",
+                "duration": None,
+                "uploader": None,
+                "thumbnail": None,
+                "media_type": "video",
+                "extractor_key": "youtube",
+                "max_compatible_short_side": 1080,
+            },
+        )
+    ]
+
+
+def test_preview_entrypoint_reports_empty_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _run_entrypoint(monkeypatch, lambda url: None) == [("empty", None)]
+
+
+def test_preview_entrypoint_reports_ytdlp_error_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(url: str) -> dict[str, Any] | None:
+        raise yt_dlp.utils.DownloadError("ERROR: Private video")
+
+    assert _run_entrypoint(monkeypatch, _raise) == [("extract_error", "ERROR: Private video")]
+
+
+def test_preview_entrypoint_reports_unexpected_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(url: str) -> dict[str, Any] | None:
+        raise KeyError("formats")
+
+    assert _run_entrypoint(monkeypatch, _raise) == [("error", "KeyError: 'formats'")]
 
 
 def test_guess_media_type_video() -> None:
@@ -171,7 +322,7 @@ async def test_download_returns_path_on_success(
 
     _install_runner(monkeypatch, _fake_run)
 
-    downloader = YtDlpDownloader()
+    downloader = _downloader()
     options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60)
     result = await downloader.download("https://example.com/video", options)
 
@@ -195,7 +346,7 @@ async def test_download_maps_timeout_to_timeout_error(
 
     _install_runner(monkeypatch, _raise_timeout)
 
-    downloader = YtDlpDownloader()
+    downloader = _downloader()
     options = DownloadOptions(output_dir=tmp_path, timeout_seconds=1)
 
     # Day 10: timeout gets its own category + key. The user-facing text is
@@ -228,7 +379,7 @@ async def test_download_maps_process_error_to_extraction_error(
 
     _install_runner(monkeypatch, _raise_process_error)
 
-    downloader = YtDlpDownloader()
+    downloader = _downloader()
     options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60)
 
     with pytest.raises(ExtractionError) as exc_info:
@@ -259,7 +410,7 @@ async def test_download_maps_file_too_large_to_categorized_error(
 
     _install_runner(monkeypatch, _raise_too_large)
 
-    downloader = YtDlpDownloader()
+    downloader = _downloader()
     options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60)
 
     with pytest.raises(FileTooLargeError) as exc_info:
@@ -388,7 +539,7 @@ async def test_download_wires_progress_callback_through_to_domain(
 
     _install_runner(monkeypatch, _fake_run_download_in_process)
 
-    downloader = YtDlpDownloader()
+    downloader = _downloader()
     options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60)
     result = await downloader.download(
         "https://example.com/video", options, progress_callback=_progress_callback
@@ -427,7 +578,7 @@ async def test_download_without_progress_callback_passes_none_sink(
 
     _install_runner(monkeypatch, _fake_run_download_in_process)
 
-    downloader = YtDlpDownloader()
+    downloader = _downloader()
     options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60)
     await downloader.download("https://example.com/video", options)
 
@@ -480,7 +631,7 @@ async def test_download_forwards_spec_primitives_to_child_runner(
     _install_runner(monkeypatch, _capturing_runner(captured, str(tmp_path / "out")))
 
     options = DownloadOptions(output_dir=tmp_path, timeout_seconds=60, spec=spec)
-    await YtDlpDownloader().download("https://example.com/video", options)
+    await _downloader().download("https://example.com/video", options)
 
     assert captured == {"format_kind_value": kind, "video_tier_value": tier}
     # Plain str/None (pickle-safe under spawn), never the dataclass/enum.
@@ -520,9 +671,9 @@ async def test_preview_maps_extractor_key_and_compatible_short_side(
             {"vcodec": "h265", "acodec": "none", "width": 1080, "height": 1920},
         ],
     }
-    monkeypatch.setattr(ytdlp_downloader, "_extract_info_sync", lambda url: info)
+    _install_preview_info(monkeypatch, info)
 
-    preview = await YtDlpDownloader().get_preview("https://tiktok.com/@a/video/1")
+    preview = await _downloader().get_preview("https://tiktok.com/@a/video/1")
 
     assert preview.extractor_key == "tiktok"
     # 1080 exists only in h265; the compatible (h264) top is 720.

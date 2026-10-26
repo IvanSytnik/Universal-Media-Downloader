@@ -101,6 +101,7 @@ error-age = This video is age-restricted and needs a signed-in, age-verified ses
 error-unavailable = This video was removed or no longer exists. Double-check the link.
 error-unsupported-media = This looks like a photo or slideshow. I can only download videos for now.
 error-timeout = The download took too long and was aborted. Please try again.
+error-preview-timeout = Couldn't fetch the link's details in time. Please try again a bit later.
 # $estimated_mb, $limit_mb — numbers (Fluent formats digit grouping per locale).
 error-too-large = This video is too large for Telegram (~{ $estimated_mb } MB, limit { $limit_mb } MB).
 # Delivery (downloaded but couldn't send) — worker path.

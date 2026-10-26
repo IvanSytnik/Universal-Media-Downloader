@@ -66,7 +66,7 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["engine"] = engine
     ctx["session_factory"] = create_session_factory(engine)
 
-    ctx["downloader"] = YtDlpDownloader()
+    ctx["downloader"] = YtDlpDownloader(preview_timeout_seconds=settings.preview_timeout_seconds)
     ctx["storage"] = LocalFileStorage(base_dir=DOWNLOAD_STORAGE_DIR)
     ctx["max_deliverable_file_size_bytes"] = settings.max_deliverable_file_size_bytes
     ctx["download_timeout_seconds"] = settings.download_timeout_seconds

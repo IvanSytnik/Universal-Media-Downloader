@@ -123,6 +123,13 @@ class Settings(BaseSettings):
     # terminate()'d by YtDlpDownloader when this expires.
     download_timeout_seconds: int = Field(default=1800)
 
+    # Overall ceiling for one preview extraction (bot side; /download
+    # goes through the preview too). yt-dlp's own socket_timeout/retries
+    # bound each request, not the whole extraction, so a stalled source
+    # could hold an executor thread indefinitely. The extraction runs in
+    # a child process that is terminate()'d when this expires.
+    preview_timeout_seconds: int = Field(default=60, gt=0)
+
     # Single source of truth for the deliverable file size limit — was
     # previously duplicated as a hardcoded constant in both
     # TelegramNotifier and ProcessDownloadUseCase (a real DRY violation
