@@ -57,17 +57,27 @@ still active; a request the reaper already failed (or a duplicate job
 for a finished one) is skipped without downloading or messaging
 anything — the user has already been told. An arq retry after a worker
 crash finds it PROCESSING and re-claims it, as before.
+
+Disk guard (ADR 0005). Once claimed, the request's temp directory is
+released in a ``finally`` — delivered, failed or refused, the file does
+not outlive the job (it used to wait for the cron's TTL). Before
+downloading, free space is checked against ``min_free_disk_bytes``; below
+it the request fails with ``InsufficientStorageError`` without starting
+yt-dlp.
 """
 
 from __future__ import annotations
 
 from uuid import UUID
 
+from src.domain.entities.download_request import DownloadRequest
+from src.domain.entities.user import User
 from src.domain.exceptions import (
     CorruptedRecordError,
     DownloaderError,
     ExtractionError,
     FileTooLargeError,
+    InsufficientStorageError,
     NotifierError,
     UnsupportedURLError,
 )
@@ -100,6 +110,7 @@ class ProcessDownloadUseCase:
         progress_publisher: ProgressPublisherPort,
         max_deliverable_file_size_bytes: int,
         download_timeout_seconds: int,
+        min_free_disk_bytes: int,
     ) -> None:
         """`max_deliverable_file_size_bytes` is injected (Day 6 fix): it
         used to be a hardcoded module-level constant here, duplicated
@@ -118,6 +129,9 @@ class ProcessDownloadUseCase:
 
         `progress_publisher` (Day 11B) broadcasts progress snapshots
         during the download; see the module docstring.
+
+        `min_free_disk_bytes` (disk guard) is the free-space floor below
+        which a download is refused; 0 disables the check.
         """
         self._download_request_repository = download_request_repository
         self._user_repository = user_repository
@@ -128,6 +142,7 @@ class ProcessDownloadUseCase:
         self._progress_publisher = progress_publisher
         self._max_deliverable_file_size_bytes = max_deliverable_file_size_bytes
         self._download_timeout_seconds = download_timeout_seconds
+        self._min_free_disk_bytes = min_free_disk_bytes
 
     def _localize_failure(self, exc: DownloaderError, locale: str | None) -> str:
         """Map a categorized downloader error to a localized message.
@@ -229,6 +244,57 @@ class ProcessDownloadUseCase:
             return
         request.mark_processing()
 
+        try:
+            await self._process(request, user, user.telegram_id, chat_id, message_id)
+        finally:
+            await self._storage.release(request.id)
+
+    async def _fail(
+        self,
+        request: DownloadRequest,
+        user: User,
+        telegram_id: int,
+        chat_id: int,
+        message_id: int,
+        text: str,
+    ) -> None:
+        """Mark failed, move the card to FAILED, tell the user ``text``."""
+        request.mark_failed()
+        await self._download_request_repository.update(request)
+        await self._publish_phase(
+            request.id, chat_id, message_id, user.language, ProgressPhase.FAILED
+        )
+        await self._notifier.send_text(telegram_id, text)
+
+    async def _process(
+        self,
+        request: DownloadRequest,
+        user: User,
+        telegram_id: int,
+        chat_id: int,
+        message_id: int,
+    ) -> None:
+        request_id = request.id
+        if self._min_free_disk_bytes:
+            available = await self._storage.available_bytes()
+            if available < self._min_free_disk_bytes:
+                logger.warning(
+                    "process_download_rejected_low_disk",
+                    request_id=str(request_id),
+                    available_bytes=available,
+                    min_free_bytes=self._min_free_disk_bytes,
+                    error_key=InsufficientStorageError.error_key,
+                )
+                await self._fail(
+                    request,
+                    user,
+                    telegram_id,
+                    chat_id,
+                    message_id,
+                    self._localize_failure(InsufficientStorageError(), user.language),
+                )
+                return
+
         output_dir = self._storage.temp_dir_for_request(request.id)
         options = DownloadOptions(
             output_dir=output_dir,
@@ -261,13 +327,13 @@ class ProcessDownloadUseCase:
                 error_key=getattr(exc, "error_key", None),
                 error=str(exc),
             )
-            request.mark_failed()
-            await self._download_request_repository.update(request)
-            await self._publish_phase(
-                request.id, chat_id, message_id, user.language, ProgressPhase.FAILED
-            )
-            await self._notifier.send_text(
-                user.telegram_id, self._localize_failure(exc, user.language)
+            await self._fail(
+                request,
+                user,
+                telegram_id,
+                chat_id,
+                message_id,
+                self._localize_failure(exc, user.language),
             )
             return
 
@@ -279,18 +345,17 @@ class ProcessDownloadUseCase:
             # Day 11D-1: the notifier picks video / audio / document from
             # this; `kind` is what was asked for, the facts what the file is.
             media = DeliverableMedia.from_result(result, spec_kind(request.spec))
-            await self._notifier.send_file(user.telegram_id, media)
+            await self._notifier.send_file(telegram_id, media)
         except NotifierError as exc:
             logger.warning(
                 "process_download_delivery_failed", request_id=str(request_id), error=str(exc)
             )
-            request.mark_failed()
-            await self._download_request_repository.update(request)
-            await self._publish_phase(
-                request.id, chat_id, message_id, user.language, ProgressPhase.FAILED
-            )
-            await self._notifier.send_text(
-                user.telegram_id,
+            await self._fail(
+                request,
+                user,
+                telegram_id,
+                chat_id,
+                message_id,
                 self._error_localizer.localize("error-delivery-failed", user.language),
             )
             return

@@ -159,6 +159,16 @@ class FormatNotAllowedError(DownloaderError):
     error_key = "error-format-not-allowed"
 
 
+class InsufficientStorageError(DownloaderError):
+    """Free disk space for downloads is below the configured floor, so
+    the download was refused before it started (disk guard, ADR 0005).
+    Starting it anyway would fill the disk and fail midway — for this
+    request and for every other one running next to it. Transient: the
+    user is told to retry in a few minutes."""
+
+    error_key = "error-storage-full"
+
+
 class StaleRequestError(DownloaderError):
     """A request sat in pending/processing past any live job's lifetime
     (worker crash, arq cancelling at ``job_timeout``, a lost queue

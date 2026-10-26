@@ -19,9 +19,22 @@ class StoragePort(Protocol):
         else should share it."""
         ...
 
+    async def release(self, request_id: UUID) -> None:
+        """Removes the request's directory and everything in it, if it
+        exists. Called when the job ends, however it ends. Never raises:
+        a removal that fails is logged and left to ``cleanup_expired``.
+        """
+        ...
+
+    async def available_bytes(self) -> int:
+        """Free space, in bytes, where request directories live."""
+        ...
+
     async def cleanup_expired(self, max_age_seconds: int) -> int:
-        """Deletes temp directories older than `max_age_seconds`.
-        Returns the number of directories removed. Called periodically
-        by a cron job (see worker_settings.py), not by request handlers.
+        """Deletes temp entries with no activity (newest mtime anywhere
+        inside) for more than `max_age_seconds` — what a crashed job left
+        behind. Returns the number of entries actually removed. Called
+        periodically by a cron job (see worker_settings.py), not by
+        request handlers.
         """
         ...

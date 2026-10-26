@@ -96,6 +96,12 @@ class _Storage:
     def temp_dir_for_request(self, request_id: UUID) -> Path:
         return Path("/tmp/umd-test")
 
+    async def release(self, request_id: UUID) -> None:
+        return None
+
+    async def available_bytes(self) -> int:
+        return 10**12
+
     async def cleanup_expired(self, max_age_seconds: int) -> int:  # pragma: no cover
         return 0
 
@@ -134,6 +140,7 @@ def _use_case(repo: _Repo, notifier: _Notifier, downloader: Any) -> ProcessDownl
         progress_publisher=_Pub(),  # type: ignore[arg-type]
         max_deliverable_file_size_bytes=1,
         download_timeout_seconds=1,
+        min_free_disk_bytes=0,
     )
 
 

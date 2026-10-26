@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Disk guard: `DOWNLOAD_MIN_FREE_DISK_MB` (default 3072, `0` disables). A download is refused before it starts when free space is below it (`InsufficientStorageError`, `error-storage-full`); the storage cron logs `storage_low_disk_space`. See `docs/adr/0005-disk-guard.md`.
 - Stale-request reaper: an arq cron (every 5 min) fails `pending`/`processing` requests untouched for `job_timeout` + `STALE_REQUEST_GRACE_SECONDS` (default 300 → 40 min) and tells the user (`error-request-stale`). Migration `0006_updated_at` adds `download_requests.updated_at` with a partial index on active rows. See `docs/adr/0004-stale-request-reaper.md`.
 - `PREVIEW_TIMEOUT_SECONDS` (default 60): overall limit for one preview extraction. On expiry the extraction is killed and the user gets `error-preview-timeout` (`PreviewTimeoutError`). See `docs/adr/0003-preview-timeout-process-isolation.md`.
 - `DownloadResult` (path, width, height, duration, title, uploader): `DownloaderPort.download` returns the media facts from yt-dlp's final info (after merge/transcode); `ffprobe` only fills what the info lacks.
@@ -17,12 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A request's temp directory is removed when its job ends (delivered, failed or refused) instead of waiting for the cron. The cron now sweeps only crash leftovers, by the newest mtime anywhere inside an entry, with the reaper's threshold (40 min) instead of a fixed 1 h on the directory's own mtime.
 - The worker commits each status transition on its own (one transaction per repository call) instead of holding one transaction for the whole download; `processing` is now visible while the job runs. A job starts by claiming its request (`claim_for_processing`) and skips one that is no longer active.
 - `get_preview` runs yt-dlp in a forkserver child process instead of the default thread pool; only the preview facts come back. `YtDlpDownloader` takes `preview_timeout_seconds`.
 - `TelegramNotifier` sends a video with known dimensions and duration via `send_video` (`supports_streaming=True`) and an audio track with a duration via `send_audio` (title, performer); `send_document` is the fallback when a fact is missing. Logged as `notifier_file_sent method=…`.
 
 ### Fixed
 
+- Delivered files stayed on disk for up to an hour after delivery, and a failed removal was counted as removed (`rmtree(ignore_errors=True)`).
 - A request whose job died (worker crash, arq `job_timeout`, lost queue message) stayed `pending`/`processing` forever and its user never heard back.
 - A stalled preview extraction (slow source, unanswered DNS) held an executor thread indefinitely; enough of them stopped the bot from answering any link, `/download` included.
 - The progress card stayed on the last percentage ("Downloading… 61%") after the file was delivered (since Day 11B); the listener now also drops the request's throttle state on `DONE` / `FAILED`.

@@ -14,6 +14,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
+import structlog
 
 from src.application.use_cases.process_download import ProcessDownloadUseCase
 from src.domain.entities.download_request import DownloadRequest
@@ -23,6 +24,7 @@ from src.domain.value_objects.deliverable_media import DeliverableMedia
 from src.domain.value_objects.download_options import DownloadOptions
 from src.domain.value_objects.download_result import DownloadResult
 from src.domain.value_objects.enums import DownloadStatus
+from src.domain.value_objects.progress_phase import ProgressPhase
 from tests.conftest import FakeErrorLocalizer
 
 _CHAT_ID = 777
@@ -109,6 +111,12 @@ class FakeStorage:
     def temp_dir_for_request(self, request_id: UUID) -> Path:
         return Path(f"/tmp/fake/{request_id}")
 
+    async def release(self, request_id: UUID) -> None:
+        return None
+
+    async def available_bytes(self) -> int:
+        return 10**12
+
     async def cleanup_expired(self, max_age_seconds: int) -> int:
         return 0
 
@@ -139,18 +147,26 @@ def _make_request_and_user() -> tuple[DownloadRequest, User]:
 
 
 def _use_case(
-    request_repo, user_repo, downloader, notifier, localizer, progress_publisher=None
+    request_repo,
+    user_repo,
+    downloader,
+    notifier,
+    localizer,
+    progress_publisher=None,
+    storage=None,
+    min_free_disk_bytes=0,
 ) -> ProcessDownloadUseCase:
     return ProcessDownloadUseCase(
         download_request_repository=request_repo,
         user_repository=user_repo,
         downloader=downloader,
-        storage=FakeStorage(),
+        storage=storage or FakeStorage(),
         notifier=notifier,
         error_localizer=localizer,
         progress_publisher=progress_publisher or FakeProgressPublisher(),
         max_deliverable_file_size_bytes=_MAX_BYTES,
         download_timeout_seconds=_TIMEOUT,
+        min_free_disk_bytes=min_free_disk_bytes,
     )
 
 
@@ -277,3 +293,162 @@ async def test_request_that_cannot_be_claimed_is_skipped_silently(i18n_core) -> 
     assert notifier.sent_files == []
     assert publisher.calls == []
     assert request.status == DownloadStatus.PENDING
+
+
+# --- disk guard (ADR 0005) ---------------------------------------------------
+
+
+class _RecordingStorage(FakeStorage):
+    def __init__(self, available: int = 10**12) -> None:
+        self.available = available
+        self.released: list[UUID] = []
+        self.availability_checks = 0
+
+    async def release(self, request_id: UUID) -> None:
+        self.released.append(request_id)
+
+    async def available_bytes(self) -> int:
+        self.availability_checks += 1
+        return self.available
+
+
+class _ExplodingDownloader(FakeDownloader):
+    async def download(self, url, options, progress_callback=None) -> DownloadResult:
+        raise RuntimeError("yt-dlp internals blew up")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("downloader", "fail_send_file"),
+    [
+        (FakeDownloader(result_path=Path("/tmp/fake/v.mp4")), False),  # delivered
+        (FakeDownloader(error=ExtractionError()), False),  # download failed
+        (FakeDownloader(result_path=Path("/tmp/fake/v.mp4")), True),  # delivery failed
+    ],
+    ids=["done", "download-failed", "delivery-failed"],
+)
+async def test_request_directory_is_released_however_the_job_ends(
+    i18n_core, downloader, fail_send_file
+) -> None:
+    request, user = _make_request_and_user()
+    storage = _RecordingStorage()
+
+    await _use_case(
+        FakeDownloadRequestRepository(request),
+        FakeUserRepository(user),
+        downloader,
+        FakeNotifier(fail_send_file=fail_send_file),
+        FakeErrorLocalizer(i18n_core),
+        storage=storage,
+    ).execute(request.id, _CHAT_ID, _MESSAGE_ID)
+
+    assert storage.released == [request.id]
+
+
+@pytest.mark.asyncio
+async def test_directory_is_released_even_when_the_download_raises_unexpectedly(
+    i18n_core,
+) -> None:
+    request, user = _make_request_and_user()
+    storage = _RecordingStorage()
+
+    with pytest.raises(RuntimeError):
+        await _use_case(
+            FakeDownloadRequestRepository(request),
+            FakeUserRepository(user),
+            _ExplodingDownloader(),
+            FakeNotifier(),
+            FakeErrorLocalizer(i18n_core),
+            storage=storage,
+        ).execute(request.id, _CHAT_ID, _MESSAGE_ID)
+
+    assert storage.released == [request.id]
+
+
+@pytest.mark.asyncio
+async def test_unclaimed_request_does_not_touch_storage(i18n_core) -> None:
+    """The directory may belong to whoever does own the request."""
+    request, user = _make_request_and_user()
+    storage = _RecordingStorage()
+
+    await _use_case(
+        _InactiveRequestRepository(request),
+        FakeUserRepository(user),
+        _NeverCalledDownloader(),
+        FakeNotifier(),
+        FakeErrorLocalizer(i18n_core),
+        storage=storage,
+        min_free_disk_bytes=1,
+    ).execute(request.id, _CHAT_ID, _MESSAGE_ID)
+
+    assert storage.released == []
+    assert storage.availability_checks == 0
+
+
+@pytest.mark.asyncio
+async def test_low_disk_refuses_the_download_and_tells_the_user(i18n_core) -> None:
+    request, user = _make_request_and_user()
+    request_repo = FakeDownloadRequestRepository(request)
+    storage = _RecordingStorage(available=999)
+    notifier = FakeNotifier()
+    publisher = FakeProgressPublisher()
+    localizer = FakeErrorLocalizer(i18n_core)
+
+    with structlog.testing.capture_logs() as logs:
+        await _use_case(
+            request_repo,
+            FakeUserRepository(user),
+            _NeverCalledDownloader(),
+            notifier,
+            localizer,
+            publisher,
+            storage=storage,
+            min_free_disk_bytes=1000,
+        ).execute(request.id, _CHAT_ID, _MESSAGE_ID)
+
+    assert request_repo.updates == [DownloadStatus.PROCESSING, DownloadStatus.FAILED]
+    assert notifier.sent_texts == [(555, localizer.localize("error-storage-full", user.language))]
+    assert publisher.calls[-1][4].phase == ProgressPhase.FAILED
+    assert storage.released == [request.id]
+    entry = next(e for e in logs if e["event"] == "process_download_rejected_low_disk")
+    assert entry["request_id"] == str(request.id)
+    assert entry["available_bytes"] == 999
+    assert entry["min_free_bytes"] == 1000
+    assert entry["error_key"] == "error-storage-full"
+
+
+@pytest.mark.asyncio
+async def test_free_space_exactly_at_the_floor_is_enough(i18n_core) -> None:
+    request, user = _make_request_and_user()
+    request_repo = FakeDownloadRequestRepository(request)
+
+    await _use_case(
+        request_repo,
+        FakeUserRepository(user),
+        FakeDownloader(result_path=Path("/tmp/fake/v.mp4")),
+        FakeNotifier(),
+        FakeErrorLocalizer(i18n_core),
+        storage=_RecordingStorage(available=1000),
+        min_free_disk_bytes=1000,
+    ).execute(request.id, _CHAT_ID, _MESSAGE_ID)
+
+    assert request_repo.updates == [DownloadStatus.PROCESSING, DownloadStatus.DONE]
+
+
+@pytest.mark.asyncio
+async def test_zero_floor_disables_the_check(i18n_core) -> None:
+    request, user = _make_request_and_user()
+    storage = _RecordingStorage(available=0)
+
+    await _use_case(
+        FakeDownloadRequestRepository(request),
+        FakeUserRepository(user),
+        FakeDownloader(result_path=Path("/tmp/fake/v.mp4")),
+        FakeNotifier(),
+        FakeErrorLocalizer(i18n_core),
+        storage=storage,
+        min_free_disk_bytes=0,
+    ).execute(request.id, _CHAT_ID, _MESSAGE_ID)
+
+    assert storage.availability_checks == 0
+    assert request.status == DownloadStatus.DONE

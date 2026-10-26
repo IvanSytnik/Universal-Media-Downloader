@@ -65,6 +65,7 @@ async def download_job(ctx: dict[str, Any], request_id: str, chat_id: int, messa
         progress_publisher=ctx["progress_publisher"],
         max_deliverable_file_size_bytes=ctx["max_deliverable_file_size_bytes"],
         download_timeout_seconds=ctx["download_timeout_seconds"],
+        min_free_disk_bytes=ctx["download_min_free_disk_bytes"],
     )
     await use_case.execute(UUID(request_id), chat_id, message_id)
 
@@ -90,8 +91,24 @@ async def reap_stale_requests_job(ctx: dict[str, Any]) -> int:
 async def cleanup_expired_downloads_job(ctx: dict[str, Any]) -> None:
     """Runs on a cron schedule (see worker_settings.py) — not triggered
     by any single download, so old temp files get removed even if the
-    server never restarts."""
+    server never restarts.
+
+    Disk guard (ADR 0005): jobs release their own directories now, so
+    this only sweeps what a crashed job left. The age threshold is the
+    reaper's (job_timeout + grace): no live job goes that long without
+    touching its files. Low free space is logged here too — the per-job
+    check refuses downloads, this line is what an operator sees.
+    """
     storage = ctx["storage"]
-    removed = await storage.cleanup_expired(max_age_seconds=3600)
+    max_age = int(ctx["stale_request_after"].total_seconds())
+    removed = await storage.cleanup_expired(max_age_seconds=max_age)
     if removed:
         logger.info("cleanup_expired_downloads", removed_count=removed)
+
+    available = await storage.available_bytes()
+    if available < ctx["download_min_free_disk_bytes"]:
+        logger.warning(
+            "storage_low_disk_space",
+            available_bytes=available,
+            min_free_bytes=ctx["download_min_free_disk_bytes"],
+        )

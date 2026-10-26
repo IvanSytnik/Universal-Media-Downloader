@@ -108,6 +108,8 @@ error-too-large = This video is too large for Telegram (~{ $estimated_mb } MB, l
 error-delivery-failed = I downloaded the video but couldn't send it to Telegram. Please try again later.
 # Reaper: the request stalled (worker crash or an unfinished job) and was closed.
 error-request-stale = I couldn't finish this request — it got stuck and was cancelled. Please send the link again.
+# Disk guard: too little disk space for downloads, nothing was started.
+error-storage-full = I'm overloaded right now and can't start the download. Please try again in a few minutes.
 # Internal failure on our side (Day 11C.3): a database row is unreadable.
 # Nothing for the user to act on, so keep it short and free of
 # diagnostics (bug #6) — those go to the log.

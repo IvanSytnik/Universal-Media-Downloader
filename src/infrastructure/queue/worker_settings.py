@@ -88,6 +88,7 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["storage"] = LocalFileStorage(base_dir=DOWNLOAD_STORAGE_DIR)
     ctx["max_deliverable_file_size_bytes"] = settings.max_deliverable_file_size_bytes
     ctx["download_timeout_seconds"] = settings.download_timeout_seconds
+    ctx["download_min_free_disk_bytes"] = settings.download_min_free_disk_bytes
     ctx["stale_request_after"] = timedelta(
         seconds=JOB_TIMEOUT_SECONDS + settings.stale_request_grace_seconds
     )
@@ -121,9 +122,9 @@ async def shutdown(ctx: dict[str, Any]) -> None:
 class WorkerSettings:
     functions = [ping_job, download_job]
     cron_jobs = [
-        # Every 15 minutes — frequent enough that a 1-hour TTL (see
-        # cleanup_expired_downloads_job) never lets much accumulate,
-        # infrequent enough not to matter for worker load.
+        # Every 15 minutes. Jobs release their own files (ADR 0005); this
+        # only sweeps crash leftovers past the reaper's threshold and logs
+        # low free space, so it need not run often.
         cron(cleanup_expired_downloads_job, minute={0, 15, 30, 45}),
         # Every 5 minutes: a stuck request is noticed at most ~5 min after
         # it crosses the threshold (40 min by default), at the cost of

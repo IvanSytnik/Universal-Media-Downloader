@@ -56,6 +56,12 @@ class _FakeStorage:
     def temp_dir_for_request(self, request_id: UUID) -> Path:
         return Path(f"/tmp/fake/{request_id}")
 
+    async def release(self, request_id: UUID) -> None:
+        return None
+
+    async def available_bytes(self) -> int:
+        return 10**12
+
 
 class _FakeNotifier:
     async def send_file(
@@ -129,6 +135,7 @@ async def test_progress_events_are_published_with_correct_coordinates_and_langua
         progress_publisher=publisher,
         max_deliverable_file_size_bytes=_MAX_BYTES,
         download_timeout_seconds=_TIMEOUT,
+        min_free_disk_bytes=0,
     )
 
     await use_case.execute(request.id, chat_id=777, message_id=888)
@@ -163,6 +170,7 @@ async def test_no_progress_events_means_only_the_phase_markers() -> None:
         progress_publisher=publisher,
         max_deliverable_file_size_bytes=_MAX_BYTES,
         download_timeout_seconds=_TIMEOUT,
+        min_free_disk_bytes=0,
     )
 
     await use_case.execute(request.id, chat_id=1, message_id=2)
@@ -256,6 +264,7 @@ def _use_case(
         progress_publisher=publisher,
         max_deliverable_file_size_bytes=_MAX_BYTES,
         download_timeout_seconds=_TIMEOUT,
+        min_free_disk_bytes=0,
     )
     return use_case, publisher
 

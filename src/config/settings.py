@@ -136,6 +136,13 @@ class Settings(BaseSettings):
     # the tail of a job arq is cancelling at job_timeout.
     stale_request_grace_seconds: int = Field(default=300, gt=0)
 
+    # Disk guard (ADR 0005): a download is refused (error-storage-full)
+    # when less than this is free in the download directory. A video+audio
+    # download holds both streams and the merged file at once (~2x the
+    # file), and the worker runs several jobs side by side, so keep this
+    # at a few times max_deliverable_file_size_mb. 0 disables the check.
+    download_min_free_disk_mb: int = Field(default=3072, ge=0)
+
     # Single source of truth for the deliverable file size limit — was
     # previously duplicated as a hardcoded constant in both
     # TelegramNotifier and ProcessDownloadUseCase (a real DRY violation
@@ -197,6 +204,10 @@ class Settings(BaseSettings):
     @property
     def admin_telegram_ids_set(self) -> frozenset[int]:
         return frozenset(self.admin_telegram_ids)
+
+    @property
+    def download_min_free_disk_bytes(self) -> int:
+        return self.download_min_free_disk_mb * 1024 * 1024
 
     @property
     def max_deliverable_file_size_bytes(self) -> int:

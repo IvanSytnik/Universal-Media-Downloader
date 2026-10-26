@@ -136,3 +136,29 @@ def test_stale_request_grace_must_be_positive() -> None:
             stale_request_grace_seconds=0,
             _env_file=None,  # type: ignore[call-arg]
         )
+
+
+def test_download_min_free_disk_defaults_to_3_gb() -> None:
+    settings = Settings(
+        bot_token="test-token",  # type: ignore[arg-type]
+        _env_file=None,  # type: ignore[call-arg]
+    )
+
+    assert settings.download_min_free_disk_mb == 3072
+    assert settings.download_min_free_disk_bytes == 3072 * 1024 * 1024
+
+
+def test_download_min_free_disk_zero_disables_and_negative_is_rejected() -> None:
+    disabled = Settings(
+        bot_token="test-token",  # type: ignore[arg-type]
+        download_min_free_disk_mb=0,
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    assert disabled.download_min_free_disk_bytes == 0
+
+    with pytest.raises(ValidationError):
+        Settings(
+            bot_token="test-token",  # type: ignore[arg-type]
+            download_min_free_disk_mb=-1,
+            _env_file=None,  # type: ignore[call-arg]
+        )

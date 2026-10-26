@@ -71,6 +71,12 @@ class _FakeStorage:
     def temp_dir_for_request(self, request_id: UUID) -> Path:
         return Path("/tmp") / str(request_id)
 
+    async def release(self, request_id: UUID) -> None:
+        return None
+
+    async def available_bytes(self) -> int:
+        return 10**12
+
 
 class _FakeNotifier:
     async def send_file(self, telegram_id: int, media: DeliverableMedia, caption=None) -> None:
@@ -102,6 +108,7 @@ def _make_use_case(request: DownloadRequest, downloader: _CapturingDownloader):
         progress_publisher=_NoopProgressPublisher(),
         max_deliverable_file_size_bytes=50 * 1024 * 1024,
         download_timeout_seconds=1800,
+        min_free_disk_bytes=0,
     )
 
 

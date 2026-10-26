@@ -99,6 +99,12 @@ class _Storage:
     def temp_dir_for_request(self, request_id: UUID) -> Path:
         return Path("/tmp/umd-test")
 
+    async def release(self, request_id: UUID) -> None:
+        return None
+
+    async def available_bytes(self) -> int:
+        return 10**12
+
     async def cleanup_expired(self, max_age_seconds: int) -> int:  # pragma: no cover
         return 0
 
@@ -135,6 +141,7 @@ async def _run(
         progress_publisher=_NoopProgressPublisher(),
         max_deliverable_file_size_bytes=2000 * 1024 * 1024,
         download_timeout_seconds=1800,
+        min_free_disk_bytes=0,
     )
     await use_case.execute(request_id, chat_id=777, message_id=888)
     return repo, notifier, request_id
