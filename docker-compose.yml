@@ -20,6 +20,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    # Without a restart policy the daemon does not bring this back after a
+    # host/daemon restart, while bot/worker (unless-stopped) do — and then
+    # crash-loop on DNS lookup of a missing service. depends_on ordering
+    # only applies to `docker compose up`, not to daemon-driven restarts.
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -31,6 +36,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    # See the postgres restart comment above.
+    restart: unless-stopped
 
   # Day 6: локальный Telegram Bot API сервер — поднимает лимит на
   # отправку файла ботом с 50 МБ (api.telegram.org) до 2000 МБ.
