@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `.env.example` is in English, lists every setting (a test fails when one is missing) and describes two profiles: *minimal* (cloud Bot API, 50 MB uploads) and *full* (local Bot API, up to 2000 MB). `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` are empty instead of placeholders that failed validation.
+- Comments and docstrings under `src/` are English; the Cyrillic guard covers them too.
 - Migrations run in a one-shot `migrate` compose service; `bot` and `worker` start only after it exits successfully (`service_completed_successfully`). The bot image no longer has an entrypoint that runs `alembic upgrade head`; `make migrate` runs the service.
 - `telegram-bot-api` is pinned to `10.2` by tag and digest instead of `:latest`, and its working directory (`/var/lib/telegram-bot-api`: the bot's session on that server) is a named volume, `telegram_bot_api_data`, so a recreated container keeps it. The server no longer mounts the download volume: files reach it as multipart uploads, never by path.
 - structlog renders through stdlib `ProcessorFormatter`: third-party logs (aiogram, arq, SQLAlchemy) share the format, timestamps and bound context of our own.

@@ -6,10 +6,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-umd}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-umd}
     ports:
-      # Настраиваемый порт хоста (Day 3): по умолчанию 5433, а не
-      # стандартный 5432 — чтобы не конфликтовать с локально
-      # установленным Postgres или другим docker-compose проектом.
-      # Поменять: HOST_POSTGRES_PORT=5432 в .env.
+      # Host port is configurable and defaults to 5433, not 5432, so it
+      # does not clash with a locally installed Postgres or another
+      # compose project. Change it with HOST_POSTGRES_PORT in .env.
       # Bound to 127.0.0.1: the default credentials must never be
       # reachable from outside the host.
       - "127.0.0.1:${HOST_POSTGRES_PORT:-5433}:5432"
@@ -29,7 +28,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      # См. комментарий про HOST_POSTGRES_PORT выше — та же идея.
+      # Same idea as HOST_POSTGRES_PORT above.
       - "127.0.0.1:${HOST_REDIS_PORT:-6380}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]

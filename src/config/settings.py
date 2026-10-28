@@ -63,10 +63,10 @@ class Settings(BaseSettings):
     local_bot_api_base_url: str = Field(default="http://telegram-bot-api:8081")
 
     # --- i18n (Day 9) ---
-    # Последний fallback локали, когда у юзера нет ни override, ни
-    # распознаваемого Telegram language_code. Держим тут, т.к.
-    # SUPPORTED_LOCALES всё равно код (новые FTL + переводы кнопок), а
-    # это — единственный конфигурируемый параметр локализации.
+    # Last-resort locale when the user has neither an override nor a
+    # recognised Telegram language_code. It lives here because it is the
+    # only configurable part of localization; SUPPORTED_LOCALES is code
+    # anyway (a new locale needs FTL files and button translations).
     default_locale: str = Field(default="en")
 
     # --- Download flow (Day 7) ---

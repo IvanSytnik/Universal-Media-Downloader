@@ -26,7 +26,7 @@ from tests.conftest import FakeI18n
 
 _ALLOWED = frozenset({"youtube.com", "tiktok.com"})
 _BLOCKED = frozenset({"music.youtube.com"})
-_CYRILLIC = re.compile("[Ѐ-ӿ]")
+_CYRILLIC = re.compile("[\u0400-\u04ff]")
 
 
 def _reject(url: str) -> UnsupportedURLError:

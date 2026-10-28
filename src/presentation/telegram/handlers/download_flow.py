@@ -6,8 +6,8 @@ into control flow, per the Day 9 architecture discussion):
 
 The two main-menu buttons are a *reply* keyboard, which Telegram gives no
 callback_data — they can only be routed by their visible TEXT. Once that
-text is localized, "⬇️ Скачать" and "⬇️ Download" are the same logical
-button. A user can also still have an old keyboard (rendered in a
+text is localized, the Russian and the English ``btn-download`` labels
+are the same logical button. A user can also still have an old keyboard (rendered in a
 previous locale) at the bottom of the chat after switching languages. So
 matching a single constant string is wrong; we match against the SET of
 all translations of the button key, across every enabled locale. That
