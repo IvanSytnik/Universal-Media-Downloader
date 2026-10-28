@@ -149,6 +149,7 @@ class WorkerSettings:
     on_startup = startup
     on_shutdown = shutdown
     job_timeout = JOB_TIMEOUT_SECONDS  # see the constant's comment
+    max_jobs = settings.worker_max_jobs
     # Heartbeat for the Compose healthcheck (`arq --check`). arq's default
     # of 3600s would let a dead worker look healthy for up to an hour.
     health_check_interval = 60

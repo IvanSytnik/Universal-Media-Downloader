@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `WORKER_MAX_JOBS` (default 4): concurrent download jobs per worker, passed to arq's `max_jobs`. It was arq's implicit default of 10.
 - `docs/architecture.md`: layers and the dependency rule (with its two documented exceptions), the two-phase flow, process isolation, the progress bridge, the request status lifecycle, and the numbered engineering pitfalls that code comments refer to.
 - `SECURITY.md`: vulnerability reporting, untrusted input (URLs, callback data, the database), process and file handling, secrets, responsible use.
 - Persistent logs: with `LOG_DIR` set, every record is also written as JSON lines to `<LOG_DIR>/<service>.log` (`bot.log`, `worker.log`), rotated by size (`LOG_FILE_MAX_MB` 50 × `LOG_FILE_BACKUPS` 10). Compose mounts the named volume `app_logs` at `/var/log/umd`, which survives `down` / `up -d`. See `docs/adr/0006-persistent-logs-and-sentry.md`.

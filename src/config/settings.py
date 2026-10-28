@@ -148,6 +148,14 @@ class Settings(BaseSettings):
     # the tail of a job arq is cancelling at job_timeout.
     stale_request_grace_seconds: int = Field(default=300, gt=0)
 
+    # Concurrent download jobs per worker (arq max_jobs). Each job is a
+    # spawned yt-dlp process plus ffmpeg, a few hundred MB of RAM and up
+    # to ~2x the file on disk, and every job is one more request from the
+    # host's IP to the source site. arq's own default (10) was never a
+    # decision; size this to the host. DOWNLOAD_MIN_FREE_DISK_MB scales
+    # with it.
+    worker_max_jobs: int = Field(default=4, gt=0)
+
     # Disk guard (ADR 0005): a download is refused (error-storage-full)
     # when less than this is free in the download directory. A video+audio
     # download holds both streams and the merged file at once (~2x the
