@@ -23,6 +23,11 @@ jobs:
         with:
           python-version: "3.13"
 
+      # The system binary, as in the image: test_media_facts runs ffprobe
+      # on a real clip and is skipped without it.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
       # Same uv as infra/docker/bot.Dockerfile.
       - name: Install uv
         run: pip install uv==0.8.22
@@ -46,13 +51,14 @@ jobs:
 
       # Coverage gate on the core layers; thresholds live in pyproject.toml
       # ([tool.coverage.report]) and the Makefile's `test-cov` target.
+      # Fails on any skip except the PostgreSQL migration tests, which the
+      # `migrations` job runs: a skipped test here is a test nobody runs.
       - name: Test with coverage gate (domain + application ≥ 90%)
-        run: >
-          uv run pytest -v
-          --cov=src/domain
-          --cov=src/application
-          --cov-report=term-missing
-          --cov-fail-under=90
+        run: |
+          set -o pipefail
+          uv run pytest -v -rs --cov=src/domain --cov=src/application \
+            --cov-report=term-missing --cov-fail-under=90 | tee pytest.out
+          ! grep SKIPPED pytest.out | grep -v UMD_MIGRATION_TEST_PG
 
   # Migration test against a real PostgreSQL (CHECK constraints, server
   # defaults and backfills behave differently on SQLite). The test is
