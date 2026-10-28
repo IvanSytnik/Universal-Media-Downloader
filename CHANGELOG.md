@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `USE_LOCAL_BOT_API=true` without `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` passed validation, although the settings promised to fail at startup; the bot then failed on the first upload. Startup now stops with a message naming the missing variables and where to get them. Blank values (`TELEGRAM_API_ID=`) mean "not set" instead of an integer parse error.
 - An English-speaking user got Russian text: URL rejection reasons, the "Untitled" fallback of the preview card and the "MB/s" unit were hardcoded Russian strings. Each rejection reason is now its own `UnsupportedURLError` subclass with an `error_key` (`error-url-empty`, `error-url-scheme`, `error-url-no-host`, `error-url-domain-not-allowed`; a blocked domain is `error-unsupported-site`, without the list of supported sites), rendered by `format_download_error`; `error-bad-url` is gone. `preview-title-unknown` and `progress-speed` come from the locale. A test fails on any Cyrillic string literal under `src/`.
 - `/download` answered yt-dlp's own "Unsupported URL" with "Invalid link: " and nothing after the colon; it now says the site is not supported.
 - Failure log lines no longer carry an empty `error=`: classified domain errors are raised without a message (bug #6), so a deleted YouTube video logged `process_download_failed error=""`. Every `error=` field now goes through `describe_error`, which falls back to the exception's class name.
