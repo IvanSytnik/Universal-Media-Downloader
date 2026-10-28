@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Dependency versions, now pinned by `uv.lock`. Against the image of the last live run (2026-10-26): yt-dlp 2026.10.21 → 2026.10.26, plus the `yt-dlp[default]` extras (`yt-dlp-ejs` 0.8.0, brotli, websockets, requests, mutagen, pycryptodomex). The local test environment, which had drifted behind the image, moves to the image's versions: SQLAlchemy 2.0.51 → 2.1.6, aiogram 3.29.1 → 3.31.0, yt-dlp 2026.8.19 → 2026.10.26; tools ruff 0.15.21 → 0.17.3, mypy 2.2.0 → 2.4.1. The full gate and the PostgreSQL migration tests pass on the locked set.
 - Dependencies are locked in `uv.lock`. The image installs exactly the locked versions (`uv sync --frozen`), CI installs from the lock with `--locked` (failing when it is out of date with `pyproject.toml`) and runs the gate on those versions. A dependency update is a lock change, e.g. `uv lock --upgrade-package yt-dlp`; `pyproject.toml` keeps the lower bounds (`yt-dlp>=2026.08.19`).
 - `.env.example` is in English, lists every setting (a test fails when one is missing) and describes two profiles: *minimal* (cloud Bot API, 50 MB uploads) and *full* (local Bot API, up to 2000 MB). `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` are empty instead of placeholders that failed validation.
 - Comments and docstrings under `src/` are English; the Cyrillic guard covers them too.
@@ -38,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- YouTube JS challenges were not solved in the image: `yt-dlp-ejs` was missing, so yt-dlp logged "n challenge solving failed: Some formats may be missing" on every YouTube link, which on a server is easy to mistake for an IP block. The dependency is now `yt-dlp[default]`, which pins `yt-dlp-ejs` to the version the yt-dlp release expects (0.8.0 for 2026.10.26); deno 2.5.6 in the image runs it. Upgrade both together: `uv lock --upgrade-package yt-dlp --upgrade-package yt-dlp-ejs`.
 - On a fresh database the worker could run before the bot had applied migrations: its first reaper tick failed with `relation "download_requests" does not exist`.
 - `USE_LOCAL_BOT_API=true` without `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` passed validation, although the settings promised to fail at startup; the bot then failed on the first upload. Startup now stops with a message naming the missing variables and where to get them. Blank values (`TELEGRAM_API_ID=`) mean "not set" instead of an integer parse error.
 - An English-speaking user got Russian text: URL rejection reasons, the "Untitled" fallback of the preview card and the "MB/s" unit were hardcoded Russian strings. Each rejection reason is now its own `UnsupportedURLError` subclass with an `error_key` (`error-url-empty`, `error-url-scheme`, `error-url-no-host`, `error-url-domain-not-allowed`; a blocked domain is `error-unsupported-site`, without the list of supported sites), rendered by `format_download_error`; `error-bad-url` is gone. `preview-title-unknown` and `progress-speed` come from the locale. A test fails on any Cyrillic string literal under `src/`.
