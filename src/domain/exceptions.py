@@ -100,7 +100,7 @@ class ExtractionError(DownloaderError):
     can't confidently place into a more specific subclass surfaces as a
     plain ``ExtractionError`` with the generic ``error_key``. Never put
     the raw yt-dlp message into the text shown to the user — it's
-    diagnostic (see the adapter and bug #6 in HANDOFF); log it, show the
+    diagnostic (see the adapter and bug #6 in docs/architecture.md); log it, show the
     keyed message.
     """
 

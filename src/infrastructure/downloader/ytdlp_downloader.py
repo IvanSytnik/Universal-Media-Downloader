@@ -1,7 +1,7 @@
 """yt-dlp implementation of DownloaderPort.
 
 Uses yt-dlp's native Python API (`yt_dlp.YoutubeDL`), not a CLI subprocess
-wrapper — decided in PROJECT_SPEC §6.4.
+wrapper (docs/architecture.md, Process isolation).
 
 **Why `download()` spawns a fresh process per call (Day 5):**
 
@@ -36,7 +36,7 @@ to a localized message.
 kind (since Day 11C v2: ``options.spec``). VIDEO downloads an mp4 (see Day 11C below for
 the current selector). AUDIO uses a bestaudio selector
 plus an ``FFmpegExtractAudio`` postprocessor that produces an mp3 — the
-system ffmpeg binary (already required, PROJECT_SPEC §2) does the
+system ffmpeg binary (installed in bot.Dockerfile) does the
 transcode. The final filename still comes from ``post_hooks`` (bug #4):
 the postprocessor changes the extension to .mp3, and post_hooks reports
 the real post-transcode path, so no prediction is needed.
@@ -70,7 +70,7 @@ primitive for its boundary:
 
 Progress hooks fire during the download phase; yt-dlp's own detailed
 postprocessing progress (ffmpeg mp3 transcode percentage) is still out
-of scope (TASK_Day11B.md) — but the download→postprocess BOUNDARY itself
+of scope — but the download→postprocess BOUNDARY itself
 is now surfaced (Day 11B.1). yt-dlp's ``status == "finished"`` event
 already marks that exact boundary; it used to be discarded outright (see
 _download_worker_entrypoint's docstring history). AUDIO downloads now

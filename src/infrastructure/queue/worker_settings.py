@@ -11,7 +11,7 @@ failure messages, but has no aiogram ``I18nContext`` (separate process,
 no update in flight). It therefore builds the SAME Fluent core the
 Telegram side uses and wraps it in ``FluentErrorLocalizer``, which always
 resolves keys with an EXPLICIT locale (mandatory outside an update
-context — HANDOFF bug #10/#11). ``create_i18n_core().startup()`` is a
+context — bug #10/#11, docs/architecture.md). ``create_i18n_core().startup()`` is a
 COROUTINE and must be awaited before the core is used — done here at
 worker startup, mirroring main.py.
 

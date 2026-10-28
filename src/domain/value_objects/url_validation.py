@@ -51,7 +51,7 @@ def validate_url_against_allowlist(
     allowlist of supported domains, not a blocklist).
 
     Called at the Presentation boundary (handlers), NOT inside use cases —
-    per PROJECT_SPEC §9 input validation happens at the edge, before data
+    per SECURITY.md input validation happens at the edge, before data
     enters the Application layer. Use cases keep calling plain
     `validate_url` as a structural safety net.
 
