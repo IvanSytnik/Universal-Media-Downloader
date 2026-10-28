@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Dependencies are locked in `uv.lock`. The image installs exactly the locked versions (`uv sync --frozen`), CI installs from the lock with `--locked` (failing when it is out of date with `pyproject.toml`) and runs the gate on those versions. A dependency update is a lock change, e.g. `uv lock --upgrade-package yt-dlp`; `pyproject.toml` keeps the lower bounds (`yt-dlp>=2026.08.19`).
 - `.env.example` is in English, lists every setting (a test fails when one is missing) and describes two profiles: *minimal* (cloud Bot API, 50 MB uploads) and *full* (local Bot API, up to 2000 MB). `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` are empty instead of placeholders that failed validation.
 - Comments and docstrings under `src/` are English; the Cyrillic guard covers them too.
 - Migrations run in a one-shot `migrate` compose service; `bot` and `worker` start only after it exits successfully (`service_completed_successfully`). The bot image no longer has an entrypoint that runs `alembic upgrade head`; `make migrate` runs the service.
