@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Migrations run in a one-shot `migrate` compose service; `bot` and `worker` start only after it exits successfully (`service_completed_successfully`). The bot image no longer has an entrypoint that runs `alembic upgrade head`; `make migrate` runs the service.
+- `telegram-bot-api` is pinned to `10.2` by tag and digest instead of `:latest`, and its working directory (`/var/lib/telegram-bot-api`: the bot's session on that server) is a named volume, `telegram_bot_api_data`, so a recreated container keeps it. The server no longer mounts the download volume: files reach it as multipart uploads, never by path.
 - structlog renders through stdlib `ProcessorFormatter`: third-party logs (aiogram, arq, SQLAlchemy) share the format, timestamps and bound context of our own.
 - A request's temp directory is removed when its job ends (delivered, failed or refused) instead of waiting for the cron. The cron now sweeps only crash leftovers, by the newest mtime anywhere inside an entry, with the reaper's threshold (40 min) instead of a fixed 1 h on the directory's own mtime.
 - The worker commits each status transition on its own (one transaction per repository call) instead of holding one transaction for the whole download; `processing` is now visible while the job runs. A job starts by claiming its request (`claim_for_processing`) and skips one that is no longer active.
@@ -30,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- On a fresh database the worker could run before the bot had applied migrations: its first reaper tick failed with `relation "download_requests" does not exist`.
 - `USE_LOCAL_BOT_API=true` without `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` passed validation, although the settings promised to fail at startup; the bot then failed on the first upload. Startup now stops with a message naming the missing variables and where to get them. Blank values (`TELEGRAM_API_ID=`) mean "not set" instead of an integer parse error.
 - An English-speaking user got Russian text: URL rejection reasons, the "Untitled" fallback of the preview card and the "MB/s" unit were hardcoded Russian strings. Each rejection reason is now its own `UnsupportedURLError` subclass with an `error_key` (`error-url-empty`, `error-url-scheme`, `error-url-no-host`, `error-url-domain-not-allowed`; a blocked domain is `error-unsupported-site`, without the list of supported sites), rendered by `format_download_error`; `error-bad-url` is gone. `preview-title-unknown` and `progress-speed` come from the locale. A test fails on any Cyrillic string literal under `src/`.
 - `/download` answered yt-dlp's own "Unsupported URL" with "Invalid link: " and nothing after the colon; it now says the site is not supported.

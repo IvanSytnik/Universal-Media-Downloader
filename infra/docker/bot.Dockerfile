@@ -66,9 +66,9 @@ COPY infra/alembic ./infra/alembic
 # FTL locales: the bot renders them, the worker localizes error messages.
 COPY locales ./locales
 COPY src ./src
-COPY --chmod=755 infra/docker/entrypoint.sh /entrypoint.sh
 
 USER app
 
-ENTRYPOINT ["/entrypoint.sh"]
+# Migrations are not run here: the one-shot `migrate` compose service
+# applies them before bot and worker start (docker-compose.yml).
 CMD ["python", "-m", "src.main"]
