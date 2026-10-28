@@ -73,6 +73,7 @@ preview-card =
     Автор: { $uploader }
     Длительность: { $duration }
     Тип: { $mediatype }
+preview-title-unknown = Без названия
 preview-uploader-unknown = неизвестно
 preview-duration-unknown = неизвестно
 
@@ -90,9 +91,14 @@ flow-cancelled =
 flow-preview-stale = Превью устарело — пришли ссылку ещё раз.
 
 # --- Ошибки ссылок ---
-# error-bad-url: наша ВАЛИДАЦИЯ allowlist. $reason — наш безопасный текст,
-# не диагностика yt-dlp. Остаётся с параметром (Day 9).
-error-bad-url = Некорректная ссылка: { $reason }
+# НАША валидация (url_validation.py), по ключу на причину отказа.
+# error-unsupported-site покрывает и BLOCKED_DOMAINS, и «Unsupported URL»
+# самого yt-dlp — списка сайтов там нет намеренно.
+error-url-empty = Ссылка пустая.
+error-url-scheme = Поддерживаются только ссылки http:// и https://.
+error-url-no-host = В ссылке нет домена.
+# $domains — allowlist, уже склеенный через ", ".
+error-url-domain-not-allowed = Этот сайт не поддерживается. Поддерживаются: { $domains }
 error-unsupported-site = Этот сайт не поддерживается
 
 # --- Ошибки скачивания/извлечения (Day 10) ---
@@ -129,8 +135,11 @@ error-format-not-allowed = Этот формат сейчас недоступе
 # $percent — целое число (0-100).
 progress-downloading = ⏳ Скачиваю… { $percent }%
 # Для стримов без известного total_bytes (percent = None): $mb — число,
-# $speed — уже готовая строка вида "1.2 МБ/с" (как $platforms в help-text).
+# $speed — уже готовая строка: progress-speed или "?", если скорость
+# неизвестна (как $platforms в help-text).
 progress-downloading-nostream = ⏳ Скачано { $mb } МБ ({ $speed })
+# $speed — МБ/с уже отформатированной строкой ("1.2"), не NUMBER.
+progress-speed = { $speed } МБ/с
 # Day 11B.1 — граница download→постпроцессинг, только audio-путь (mp3).
 # Без процента: прогресс самого транскода вне scope.
 progress-converting = ⏳ Конвертирую в MP3…

@@ -195,8 +195,11 @@ class TelegramProgressListener:
 
         downloaded_mb = (payload.get("downloaded_bytes") or 0) / (1024 * 1024)
         speed = payload.get("speed")
-        unit = "МБ/с" if locale == "ru" else "MB/s"
-        speed_str = f"{speed / (1024 * 1024):.1f} {unit}" if speed else "?"
+        speed_str = (
+            self._i18n_core.get("progress-speed", locale, speed=f"{speed / (1024 * 1024):.1f}")
+            if speed
+            else "?"
+        )
         return self._i18n_core.get(
             "progress-downloading-nostream",
             locale,

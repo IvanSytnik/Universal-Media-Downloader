@@ -822,7 +822,7 @@ def _wait_and_drain_progress(
         process.terminate()
         process.join(5)
         raise _DownloadTimeoutError(
-            f"Скачивание превысило лимит {timeout_seconds} секунд и было прервано"
+            f"Download exceeded the {timeout_seconds} s limit and was aborted"
         )
 
     process.join()  # already exited — reap the zombie, effectively instant
@@ -866,7 +866,7 @@ def _collect_preview_result(
             except queue.Empty:
                 process.join()
                 raise _DownloadProcessError(
-                    f"Процесс превью завершился без результата (exit code {process.exitcode})"
+                    f"Preview process exited without a result (exit code {process.exitcode})"
                 ) from None
         process.join(5)
         if process.is_alive():
@@ -874,7 +874,7 @@ def _collect_preview_result(
         return item
 
     _stop_process(process)
-    raise _PreviewTimeoutError(f"Превью превысило лимит {timeout_seconds} секунд и было прервано")
+    raise _PreviewTimeoutError(f"Preview exceeded the {timeout_seconds} s limit and was aborted")
 
 
 def _forkserver_preload() -> list[str]:
@@ -995,9 +995,7 @@ def _run_download_in_process(
             progress_sink(None)
 
     if result_queue.empty():
-        raise _DownloadProcessError(
-            f"Процесс скачивания завершился аварийно (exit code {process.exitcode})"
-        )
+        raise _DownloadProcessError(f"Download process crashed (exit code {process.exitcode})")
 
     status, payload = result_queue.get()
     if status == "too_large":
@@ -1081,7 +1079,7 @@ class YtDlpDownloader:
 
         return MediaPreview(
             source_url=url,
-            title=facts["title"] or "Без названия",
+            title=facts["title"] or None,
             duration_seconds=facts["duration"],
             uploader=facts["uploader"],
             thumbnail_url=facts["thumbnail"],

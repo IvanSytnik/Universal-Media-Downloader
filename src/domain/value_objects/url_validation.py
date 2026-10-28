@@ -1,5 +1,5 @@
-"""URL validation — the first line of defense from SECURITY.md
-("Validate every URL", "Never trust user input").
+"""URL validation — the first line of defense against untrusted input
+("validate every URL", "never trust user input"; see SECURITY.md).
 
 Deliberately minimal for Day 4: checks structure only (scheme + host),
 not an allowlist of supported sites — yt-dlp itself is the source of
@@ -13,7 +13,13 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
-from src.domain.exceptions import UnsupportedURLError
+from src.domain.exceptions import (
+    DomainBlockedError,
+    DomainNotAllowedError,
+    EmptyURLError,
+    MissingURLHostError,
+    UnsupportedURLSchemeError,
+)
 
 _ALLOWED_SCHEMES = {"http", "https"}
 
@@ -23,17 +29,15 @@ def validate_url(raw_url: str) -> str:
     url = raw_url.strip()
 
     if not url:
-        raise UnsupportedURLError("Пустая ссылка")
+        raise EmptyURLError
 
     parsed = urlparse(url)
 
     if parsed.scheme not in _ALLOWED_SCHEMES:
-        raise UnsupportedURLError(
-            f"Неподдерживаемая схема ссылки: {parsed.scheme or '(отсутствует)'}"
-        )
+        raise UnsupportedURLSchemeError
 
     if not parsed.netloc:
-        raise UnsupportedURLError("Ссылка не содержит домен")
+        raise MissingURLHostError
 
     return url
 
@@ -43,8 +47,8 @@ def validate_url_against_allowlist(
     allowed_domains: frozenset[str],
     blocked_domains: frozenset[str] = frozenset(),
 ) -> str:
-    """Structural validation + domain allowlist check (SECURITY.md:
-    "allowlist поддерживаемых доменов, а не blacklist").
+    """Structural validation + domain allowlist check (SECURITY.md: an
+    allowlist of supported domains, not a blocklist).
 
     Called at the Presentation boundary (handlers), NOT inside use cases —
     per PROJECT_SPEC §9 input validation happens at the edge, before data
@@ -65,23 +69,22 @@ def validate_url_against_allowlist(
     but that nothing downstream can tell apart: ``music.youtube.com``
     resolves to the same yt-dlp extractor as YouTube, so the per-extractor
     FormatPolicy cannot exclude it — only the URL can. A blocked site is
-    refused with the same message as an unsupported one.
+    refused as "not supported", without the list of supported sites.
 
     Raises:
-        UnsupportedURLError: structurally invalid URL or domain not allowed.
+        UnsupportedURLError: a subclass per reason — EmptyURLError,
+            UnsupportedURLSchemeError, MissingURLHostError,
+            DomainBlockedError, DomainNotAllowedError.
     """
     url = validate_url(raw_url)
     hostname = (urlparse(url).hostname or "").lower().rstrip(".")
 
-    blocked = any(_host_matches(hostname, domain) for domain in blocked_domains)
-    if not blocked and (
-        not allowed_domains or any(_host_matches(hostname, d) for d in allowed_domains)
-    ):
+    if any(_host_matches(hostname, domain) for domain in blocked_domains):
+        raise DomainBlockedError
+    if not allowed_domains or any(_host_matches(hostname, d) for d in allowed_domains):
         return url
 
-    raise UnsupportedURLError(
-        "Этот сайт не поддерживается. Поддерживаемые: " + ", ".join(sorted(allowed_domains))
-    )
+    raise DomainNotAllowedError(tuple(sorted(allowed_domains)))
 
 
 def _host_matches(hostname: str, domain: str) -> bool:

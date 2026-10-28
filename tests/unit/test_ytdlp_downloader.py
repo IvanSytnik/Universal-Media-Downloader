@@ -136,7 +136,8 @@ async def test_get_preview_falls_back_to_default_title(monkeypatch: pytest.Monke
     downloader = _downloader()
     preview = await downloader.get_preview("https://example.com/video")
 
-    assert preview.title == "Без названия"
+    # No title is None here; the card's "Untitled" comes from the locale.
+    assert preview.title is None
     assert preview.duration_seconds is None
     assert preview.media_type == MediaType.UNKNOWN
 

@@ -27,7 +27,7 @@ from src.domain.value_objects.enums import MediaType
 @dataclass(frozen=True, slots=True)
 class MediaPreview:
     source_url: str
-    title: str
+    title: str | None
     duration_seconds: int | None
     uploader: str | None
     thumbnail_url: str | None
