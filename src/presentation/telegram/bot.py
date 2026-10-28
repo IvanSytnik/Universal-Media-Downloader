@@ -22,6 +22,7 @@ from src.presentation.telegram.handlers.admin import router as admin_router
 from src.presentation.telegram.handlers.basic import router as basic_router
 from src.presentation.telegram.handlers.download import router as download_router
 from src.presentation.telegram.handlers.download_flow import router as download_flow_router
+from src.presentation.telegram.handlers.fallback import router as fallback_router
 from src.presentation.telegram.handlers.language import router as language_router
 from src.presentation.telegram.handlers.preview import router as preview_router
 from src.presentation.telegram.i18n import collect_button_translations
@@ -38,9 +39,9 @@ def create_dispatcher(
     locales are loaded), so ``button_translations`` — derived from that
     same core — is consistent with what the middleware will render.
 
-    Router order matters: download_flow_router goes LAST because its
-    plain-URL handler matches any http(s):// message; command routers
-    must get first pick.
+    Router order matters: download_flow_router comes after the command
+    routers because its plain-URL handler matches any http(s):// message;
+    fallback_router goes LAST and answers whatever text nobody took.
     """
     dp = Dispatcher(storage=storage)
     # Injected into every handler/filter by name (workflow data), exactly
@@ -57,6 +58,7 @@ def create_dispatcher(
     dp.include_router(preview_router)
     dp.include_router(download_router)
     dp.include_router(download_flow_router)
+    dp.include_router(fallback_router)
     return dp
 
 

@@ -31,3 +31,5 @@ async def test_dispatcher_includes_basic_router() -> None:
 
     router_names = {router.name for router in dp.sub_routers}
     assert "basic" in router_names
+    # The catch-all answers whatever text nobody took, so it must come last.
+    assert dp.sub_routers[-1].name == "fallback"

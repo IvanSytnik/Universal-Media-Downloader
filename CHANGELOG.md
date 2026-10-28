@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Text that is not an http(s) link ("youtube.com/watch?v=…", "hello") got no answer at all: the plain-URL handler matches only text starting with `http://` or `https://`. A catch-all router, included last, now answers it with `hint-send-link` ("Send me a link that starts with https://"). It does not take commands, keyboard buttons or a message sent while the guided flow waits for a URL.
 - YouTube JS challenges were not solved in the image: `yt-dlp-ejs` was missing, so yt-dlp logged "n challenge solving failed: Some formats may be missing" on every YouTube link, which on a server is easy to mistake for an IP block. The dependency is now `yt-dlp[default]`, which pins `yt-dlp-ejs` to the version the yt-dlp release expects (0.8.0 for 2026.10.26); deno 2.5.6 in the image runs it. Upgrade both together: `uv lock --upgrade-package yt-dlp --upgrade-package yt-dlp-ejs`.
 - On a fresh database the worker could run before the bot had applied migrations: its first reaper tick failed with `relation "download_requests" does not exist`.
 - `USE_LOCAL_BOT_API=true` without `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` passed validation, although the settings promised to fail at startup; the bot then failed on the first upload. Startup now stops with a message naming the missing variables and where to get them. Blank values (`TELEGRAM_API_ID=`) mean "not set" instead of an integer parse error.

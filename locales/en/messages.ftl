@@ -87,6 +87,8 @@ flow-cancelled =
 
     ❌ Cancelled.
 flow-preview-stale = The preview has expired — send the link again.
+# Plain text that is not a link we route (no http:// or https://).
+hint-send-link = Send me a link that starts with https://
 
 # --- URL errors ---
 # OUR validation (url_validation.py), one key per rejection reason.
