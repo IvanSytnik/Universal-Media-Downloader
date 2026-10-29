@@ -39,22 +39,25 @@ services:
     restart: unless-stopped
 
   # Local Telegram Bot API server: raises the bot's upload limit from
-  # 50 MB (api.telegram.org) to 2000 MB. Used only with
-  # USE_LOCAL_BOT_API=true in .env; with the flag off it still starts
-  # (cheap) and bot/worker simply don't talk to it.
+  # 50 MB (api.telegram.org) to 2000 MB. It runs only in the
+  # `local-bot-api` profile, which .env enables together with
+  # USE_LOCAL_BOT_API=true (COMPOSE_PROFILES=local-bot-api, see
+  # .env.example). Without credentials the server exits at once, so
+  # starting it unconditionally left it in a restart loop.
   #
   # TELEGRAM_API_ID / TELEGRAM_API_HASH are a free application
   # registration at https://my.telegram.org/apps, not the bot token.
   # Moving a bot here from api.telegram.org needs a one-time logOut on
   # the cloud API first (docs/deployment.md).
   telegram-bot-api:
+    profiles: ["local-bot-api"]
     # Pinned by tag and digest: an unpinned :latest changes under a
     # running deployment on the next pull. Multi-arch (amd64, arm64).
     image: aiogram/telegram-bot-api:10.2@sha256:e0c2d269555a39d37b77ed6dd6fa5e4153b8d8399c6de9f249808682cdd942a5
     environment:
-      # Soft defaults (not ":?required"): a missing id/hash must not take
-      # the whole `docker compose up` down while USE_LOCAL_BOT_API=false.
-      # With the flag on, Settings refuses to start without them.
+      # Settings refuses to start bot/worker with USE_LOCAL_BOT_API=true
+      # and either credential missing; the soft defaults only keep
+      # `docker compose config` working without them.
       TELEGRAM_API_ID: ${TELEGRAM_API_ID:-0}
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-0}
       TELEGRAM_LOCAL: "1"
