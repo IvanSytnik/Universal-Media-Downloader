@@ -58,7 +58,9 @@ jobs:
           set -o pipefail
           uv run pytest -v -rs --cov=src/domain --cov=src/application \
             --cov-report=term-missing --cov-fail-under=90 | tee pytest.out
-          ! grep SKIPPED pytest.out | grep -v UMD_MIGRATION_TEST_PG
+          # -v also prints "<test> SKIPPED" per test, without the reason; check
+          # only the -rs summary lines, which carry it.
+          ! grep -E '^SKIPPED \[' pytest.out | grep -v UMD_MIGRATION_TEST_PG
 
   # Migration test against a real PostgreSQL (CHECK constraints, server
   # defaults and backfills behave differently on SQLite). The test is
