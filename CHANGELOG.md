@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- README rewritten: what the project is at a glance, the engineering decisions worth reviewing with links to code and ADRs, Mermaid diagrams of the layers, the request flow and the status lifecycle, both Compose profiles, verified test figures, and honest limitations.
 - `telegram-bot-api` runs only in the compose profile `local-bot-api`, enabled from `.env` with `COMPOSE_PROFILES=local-bot-api` next to `USE_LOCAL_BOT_API=true`. Started unconditionally, it exited without credentials and restarted in a loop in the minimal setup.
 - Dependency versions, now pinned by `uv.lock`. Against the image of the last live run (2026-10-26): yt-dlp 2026.10.21 → 2026.10.26, plus the `yt-dlp[default]` extras (`yt-dlp-ejs` 0.8.0, brotli, websockets, requests, mutagen, pycryptodomex). The local test environment, which had drifted behind the image, moves to the image's versions: SQLAlchemy 2.0.51 → 2.1.6, aiogram 3.29.1 → 3.31.0, yt-dlp 2026.8.19 → 2026.10.26; tools ruff 0.15.21 → 0.17.3, mypy 2.2.0 → 2.4.1. The full gate and the PostgreSQL migration tests pass on the locked set.
 - Dependencies are locked in `uv.lock`. The image installs exactly the locked versions (`uv sync --frozen`), CI installs from the lock with `--locked` (failing when it is out of date with `pyproject.toml`) and runs the gate on those versions. A dependency update is a lock change, e.g. `uv lock --upgrade-package yt-dlp`; `pyproject.toml` keeps the lower bounds (`yt-dlp>=2026.08.19`).
