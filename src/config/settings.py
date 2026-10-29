@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -47,10 +47,11 @@ class Settings(BaseSettings):
     # --- Telegram local Bot API server (Day 6) ---
     # `telegram_api_id`/`telegram_api_hash` are consumed by the
     # `telegram-bot-api` container itself (via docker-compose env), not
-    # by our Python code directly — kept here anyway so misconfiguration
-    # fails validation at startup rather than as an obscure runtime error
-    # from the bot-api server. Free credentials from my.telegram.org —
-    # this is an application registration, not a paid API tier.
+    # by our Python code directly — kept here anyway so that
+    # USE_LOCAL_BOT_API=true without them fails validation at startup
+    # (`_local_bot_api_needs_credentials`) rather than as an obscure
+    # runtime error from the bot-api server. Free credentials from
+    # my.telegram.org — an application registration, not a paid API tier.
     telegram_api_id: int | None = Field(default=None)
     telegram_api_hash: SecretStr | None = Field(default=None)
     use_local_bot_api: bool = Field(
@@ -62,10 +63,10 @@ class Settings(BaseSettings):
     local_bot_api_base_url: str = Field(default="http://telegram-bot-api:8081")
 
     # --- i18n (Day 9) ---
-    # Последний fallback локали, когда у юзера нет ни override, ни
-    # распознаваемого Telegram language_code. Держим тут, т.к.
-    # SUPPORTED_LOCALES всё равно код (новые FTL + переводы кнопок), а
-    # это — единственный конфигурируемый параметр локализации.
+    # Last-resort locale when the user has neither an override nor a
+    # recognised Telegram language_code. It lives here because it is the
+    # only configurable part of localization; SUPPORTED_LOCALES is code
+    # anyway (a new locale needs FTL files and button translations).
     default_locale: str = Field(default="en")
 
     # --- Download flow (Day 7) ---
@@ -147,6 +148,14 @@ class Settings(BaseSettings):
     # the tail of a job arq is cancelling at job_timeout.
     stale_request_grace_seconds: int = Field(default=300, gt=0)
 
+    # Concurrent download jobs per worker (arq max_jobs). Each job is a
+    # spawned yt-dlp process plus ffmpeg, a few hundred MB of RAM and up
+    # to ~2x the file on disk, and every job is one more request from the
+    # host's IP to the source site. arq's own default (10) was never a
+    # decision; size this to the host. DOWNLOAD_MIN_FREE_DISK_MB scales
+    # with it.
+    worker_max_jobs: int = Field(default=4, gt=0)
+
     # Disk guard (ADR 0005): a download is refused (error-storage-full)
     # when less than this is free in the download directory. A video+audio
     # download holds both streams and the merged file at once (~2x the
@@ -193,14 +202,36 @@ class Settings(BaseSettings):
         """
         return self.postgres_dsn.replace("postgresql://", "postgresql+asyncpg://", 1)
 
-    @field_validator("sentry_dsn", "log_dir", mode="before")
+    @field_validator("sentry_dsn", "log_dir", "telegram_api_id", "telegram_api_hash", mode="before")
     @classmethod
     def _blank_is_unset(cls, value: object) -> object:
-        # `SENTRY_DSN=` / `LOG_DIR=` in .env (as in .env.example) mean
-        # "off", not an empty DSN or the current directory.
+        # `SENTRY_DSN=` / `LOG_DIR=` / `TELEGRAM_API_ID=` in .env (as in
+        # .env.example) mean "not set", not an empty DSN, the current
+        # directory or an unparsable integer.
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @model_validator(mode="after")
+    def _local_bot_api_needs_credentials(self) -> Settings:
+        if not self.use_local_bot_api:
+            return self
+        missing = [
+            name
+            for name, value in (
+                ("TELEGRAM_API_ID", self.telegram_api_id),
+                ("TELEGRAM_API_HASH", self.telegram_api_hash),
+            )
+            if value is None
+        ]
+        if missing:
+            raise ValueError(
+                f"USE_LOCAL_BOT_API=true requires {' and '.join(missing)}: the local "
+                "telegram-bot-api server logs in to Telegram with this application "
+                "id/hash (free, https://my.telegram.org/apps; not the bot token). "
+                "Set them, or set USE_LOCAL_BOT_API=false (50 MB upload limit)."
+            )
+        return self
 
     @field_validator("disabled_formats")
     @classmethod

@@ -64,8 +64,7 @@ class TelegramNotifier:
             size_mb = size_bytes / (1024 * 1024)
             limit_mb = self._max_file_size_bytes // (1024 * 1024)
             raise NotifierError(
-                f"Файл слишком большой для отправки в Telegram ({size_mb:.1f} МБ, "
-                f"лимит {limit_mb} МБ)"
+                f"File too large to send to Telegram ({size_mb:.1f} MB, limit {limit_mb} MB)"
             )
 
         # The multipart filename is what the recipient sees and saves as;

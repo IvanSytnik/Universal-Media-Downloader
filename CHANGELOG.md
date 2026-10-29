@@ -7,8 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-29
+
 ### Added
 
+- `docs/deployment.md`: provider-neutral runbook for a Linux VPS (sizing, firewall, first deployment, moving the bot between Bot API servers with `logOut` / `close`, post-deployment checks, upgrades and rollback, updating yt-dlp through the lock, backups).
+- `WORKER_MAX_JOBS` (default 4): concurrent download jobs per worker, passed to arq's `max_jobs`. It was arq's implicit default of 10.
+- `docs/architecture.md`: layers and the dependency rule (with its two documented exceptions), the two-phase flow, process isolation, the progress bridge, the request status lifecycle, and the numbered engineering pitfalls that code comments refer to.
+- `SECURITY.md`: vulnerability reporting, untrusted input (URLs, callback data, the database), process and file handling, secrets, responsible use.
 - Persistent logs: with `LOG_DIR` set, every record is also written as JSON lines to `<LOG_DIR>/<service>.log` (`bot.log`, `worker.log`), rotated by size (`LOG_FILE_MAX_MB` 50 × `LOG_FILE_BACKUPS` 10). Compose mounts the named volume `app_logs` at `/var/log/umd`, which survives `down` / `up -d`. See `docs/adr/0006-persistent-logs-and-sentry.md`.
 - Opt-in Sentry (`SENTRY_DSN`, `sentry-sdk`): ERROR logs and unhandled job/handler exceptions become events tagged with `request_id`, `error_key`, `extractor_key`, `job` and `service`; no frame locals, no tracing.
 - `bind_log_context` / `clear_log_context`: domain context (request id, extractor, job) on every log line and Sentry event of the current task.
@@ -21,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- README rewritten: what the project is at a glance, the engineering decisions worth reviewing with links to code and ADRs, Mermaid diagrams of the layers, the request flow and the status lifecycle, both Compose profiles, verified test figures, and honest limitations.
+- `telegram-bot-api` runs only in the compose profile `local-bot-api`, enabled from `.env` with `COMPOSE_PROFILES=local-bot-api` next to `USE_LOCAL_BOT_API=true`. Started unconditionally, it exited without credentials and restarted in a loop in the minimal setup.
+- Dependency versions, now pinned by `uv.lock`. Against the image of the last live run (2026-10-26): yt-dlp 2026.10.21 → 2026.10.26, plus the `yt-dlp[default]` extras (`yt-dlp-ejs` 0.8.0, brotli, websockets, requests, mutagen, pycryptodomex). The local test environment, which had drifted behind the image, moves to the image's versions: SQLAlchemy 2.0.51 → 2.1.6, aiogram 3.29.1 → 3.31.0, yt-dlp 2026.8.19 → 2026.10.26; tools ruff 0.15.21 → 0.17.3, mypy 2.2.0 → 2.4.1. The full gate and the PostgreSQL migration tests pass on the locked set.
+- Dependencies are locked in `uv.lock`. The image installs exactly the locked versions (`uv sync --frozen`), CI installs from the lock with `--locked` (failing when it is out of date with `pyproject.toml`) and runs the gate on those versions. A dependency update is a lock change, e.g. `uv lock --upgrade-package yt-dlp`; `pyproject.toml` keeps the lower bounds (`yt-dlp>=2026.08.19`).
+- `.env.example` is in English, lists every setting (a test fails when one is missing) and describes two profiles: *minimal* (cloud Bot API, 50 MB uploads) and *full* (local Bot API, up to 2000 MB). `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` are empty instead of placeholders that failed validation.
+- Comments and docstrings under `src/` are English; the Cyrillic guard covers them too.
+- Migrations run in a one-shot `migrate` compose service; `bot` and `worker` start only after it exits successfully (`service_completed_successfully`). The bot image no longer has an entrypoint that runs `alembic upgrade head`; `make migrate` runs the service.
+- `telegram-bot-api` is pinned to `10.2` by tag and digest instead of `:latest`, and its working directory (`/var/lib/telegram-bot-api`: the bot's session on that server) is a named volume, `telegram_bot_api_data`, so a recreated container keeps it. The server no longer mounts the download volume: files reach it as multipart uploads, never by path.
 - structlog renders through stdlib `ProcessorFormatter`: third-party logs (aiogram, arq, SQLAlchemy) share the format, timestamps and bound context of our own.
 - A request's temp directory is removed when its job ends (delivered, failed or refused) instead of waiting for the cron. The cron now sweeps only crash leftovers, by the newest mtime anywhere inside an entry, with the reaper's threshold (40 min) instead of a fixed 1 h on the directory's own mtime.
 - The worker commits each status transition on its own (one transaction per repository call) instead of holding one transaction for the whole download; `processing` is now visible while the job runs. A job starts by claiming its request (`claim_for_processing`) and skips one that is no longer active.
@@ -30,6 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Text that is not an http(s) link ("youtube.com/watch?v=…", "hello") got no answer at all: the plain-URL handler matches only text starting with `http://` or `https://`. A catch-all router, included last, now answers it with `hint-send-link` ("Send me a link that starts with https://"). It does not take commands, keyboard buttons or a message sent while the guided flow waits for a URL.
+- YouTube JS challenges were not solved in the image: `yt-dlp-ejs` was missing, so yt-dlp logged "n challenge solving failed: Some formats may be missing" on every YouTube link, which on a server is easy to mistake for an IP block. The dependency is now `yt-dlp[default]`, which pins `yt-dlp-ejs` to the version the yt-dlp release expects (0.8.0 for 2026.10.26); deno 2.5.6 in the image runs it. Upgrade both together: `uv lock --upgrade-package yt-dlp --upgrade-package yt-dlp-ejs`.
+- On a fresh database the worker could run before the bot had applied migrations: its first reaper tick failed with `relation "download_requests" does not exist`.
+- `USE_LOCAL_BOT_API=true` without `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` passed validation, although the settings promised to fail at startup; the bot then failed on the first upload. Startup now stops with a message naming the missing variables and where to get them. Blank values (`TELEGRAM_API_ID=`) mean "not set" instead of an integer parse error.
+- An English-speaking user got Russian text: URL rejection reasons, the "Untitled" fallback of the preview card and the "MB/s" unit were hardcoded Russian strings. Each rejection reason is now its own `UnsupportedURLError` subclass with an `error_key` (`error-url-empty`, `error-url-scheme`, `error-url-no-host`, `error-url-domain-not-allowed`; a blocked domain is `error-unsupported-site`, without the list of supported sites), rendered by `format_download_error`; `error-bad-url` is gone. `preview-title-unknown` and `progress-speed` come from the locale. A test fails on any Cyrillic string literal under `src/`.
+- `/download` answered yt-dlp's own "Unsupported URL" with "Invalid link: " and nothing after the colon; it now says the site is not supported.
 - Failure log lines no longer carry an empty `error=`: classified domain errors are raised without a message (bug #6), so a deleted YouTube video logged `process_download_failed error=""`. Every `error=` field now goes through `describe_error`, which falls back to the exception's class name.
 - When the job could not be enqueued, `/download` left the status message saying "started" and the guided flow left the card's buttons up with a spinner; the user heard nothing. Both now show `error-internal` (the guided card gets a `flow-download-failed` line and loses its buttons). The use case raises `DownloadEnqueueError` for this, so other failures still propagate to the error log and Sentry.
 - A fast worker could start a download job before the bot had committed its request row: the job found nothing (`process_download_request_not_found`) and the request stayed `pending` until the reaper. `request_download` now commits the row before enqueueing. A failed enqueue marks the request `failed` at once (`request_download_enqueue_failed`) instead of rolling it back silently.
@@ -228,6 +248,9 @@ Production hardening, enforced layer boundaries and repository polish.
 - Docker Compose stack with health-checked Postgres and Redis.
 - GitHub Actions CI: ruff, mypy, pytest.
 
+[Unreleased]: https://github.com/IvanSytnik/Universal-Media-Downloader/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/IvanSytnik/Universal-Media-Downloader/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/IvanSytnik/Universal-Media-Downloader/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/IvanSytnik/Universal-Media-Downloader/compare/v0.8.0...v1.0.0
 [0.8.0]: https://github.com/IvanSytnik/Universal-Media-Downloader/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/IvanSytnik/Universal-Media-Downloader/compare/v0.6.0...v0.7.0

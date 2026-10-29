@@ -106,7 +106,8 @@ async def test_parametrized_keys_resolve(core) -> None:
         assert core.get(
             "preview-card", locale, title="t", uploader="u", duration="1:00", mediatype="video"
         )
-        assert core.get("error-bad-url", locale, reason="x")
+        assert core.get("error-url-domain-not-allowed", locale, domains="youtube.com")
+        assert core.get("progress-speed", locale, speed="1.0")
         assert core.get("worker-ping-enqueued", locale, jobid="abc")
         assert core.get("progress-downloading", locale, percent=42)
         assert core.get("progress-downloading-nostream", locale, mb=1.5, speed="1.0 MB/s")

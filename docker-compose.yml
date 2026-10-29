@@ -6,10 +6,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-umd}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-umd}
     ports:
-      # Настраиваемый порт хоста (Day 3): по умолчанию 5433, а не
-      # стандартный 5432 — чтобы не конфликтовать с локально
-      # установленным Postgres или другим docker-compose проектом.
-      # Поменять: HOST_POSTGRES_PORT=5432 в .env.
+      # Host port is configurable and defaults to 5433, not 5432, so it
+      # does not clash with a locally installed Postgres or another
+      # compose project. Change it with HOST_POSTGRES_PORT in .env.
       # Bound to 127.0.0.1: the default credentials must never be
       # reachable from outside the host.
       - "127.0.0.1:${HOST_POSTGRES_PORT:-5433}:5432"
@@ -29,7 +28,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      # См. комментарий про HOST_POSTGRES_PORT выше — та же идея.
+      # Same idea as HOST_POSTGRES_PORT above.
       - "127.0.0.1:${HOST_REDIS_PORT:-6380}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -39,32 +38,54 @@ services:
     # See the postgres restart comment above.
     restart: unless-stopped
 
-  # Day 6: локальный Telegram Bot API сервер — поднимает лимит на
-  # отправку файла ботом с 50 МБ (api.telegram.org) до 2000 МБ.
-  # Нужен только если USE_LOCAL_BOT_API=true в .env; если флаг выключен,
-  # контейнер всё равно поднимется (это дёшево), но bot/worker его
-  # просто не будут использовать.
+  # Local Telegram Bot API server: raises the bot's upload limit from
+  # 50 MB (api.telegram.org) to 2000 MB. It runs only in the
+  # `local-bot-api` profile, which .env enables together with
+  # USE_LOCAL_BOT_API=true (COMPOSE_PROFILES=local-bot-api, see
+  # .env.example). Without credentials the server exits at once, so
+  # starting it unconditionally left it in a restart loop.
   #
-  # api_id/api_hash — бесплатная регистрация приложения на
-  # my.telegram.org (НЕ токен бота, отдельная пара). Инструкция в README.
+  # TELEGRAM_API_ID / TELEGRAM_API_HASH are a free application
+  # registration at https://my.telegram.org/apps, not the bot token.
+  # Moving a bot here from api.telegram.org needs a one-time logOut on
+  # the cloud API first (docs/deployment.md).
   telegram-bot-api:
-    image: aiogram/telegram-bot-api:latest
+    profiles: ["local-bot-api"]
+    # Pinned by tag and digest: an unpinned :latest changes under a
+    # running deployment on the next pull. Multi-arch (amd64, arm64).
+    image: aiogram/telegram-bot-api:10.2@sha256:e0c2d269555a39d37b77ed6dd6fa5e4153b8d8399c6de9f249808682cdd942a5
     environment:
-      # Мягкие дефолты (не ":?required"): этот сервис не должен ронять
-      # весь `docker compose up`, если ты пока не настроил
-      # api_id/api_hash — просто он не будет реально использоваться,
-      # пока USE_LOCAL_BOT_API=false в .env (это читает bot/worker,
-      # не сам этот контейнер).
+      # Settings refuses to start bot/worker with USE_LOCAL_BOT_API=true
+      # and either credential missing; the soft defaults only keep
+      # `docker compose config` working without them.
       TELEGRAM_API_ID: ${TELEGRAM_API_ID:-0}
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-0}
       TELEGRAM_LOCAL: "1"
     volumes:
-      # ВАЖНО: тот же путь, что worker использует для скачанных файлов
-      # (DOWNLOAD_STORAGE_DIR в worker_settings.py). В режиме локального
-      # сервера Telegram сам читает файл с диска для загрузки — ему
-      # нужно видеть точно тот же путь, что видит worker.
-      - download_storage:/tmp/umd-downloads
+      # The server's state (TELEGRAM_WORK_DIR): the bot's login session
+      # on this server and its data. In a volume so a recreated
+      # container keeps it. Files are uploaded to the server over HTTP
+      # (multipart), so it needs no access to the worker's downloads;
+      # their temporary copy lives in TELEGRAM_TEMP_DIR inside the
+      # container and is not covered by the disk guard.
+      - telegram_bot_api_data:/var/lib/telegram-bot-api
     restart: unless-stopped
+
+  # One-shot schema migration. bot and worker start only after it exits
+  # successfully: the worker's crons query the schema too, so applying
+  # migrations from the bot's entrypoint let a fresh worker run against
+  # an empty database ("relation download_requests does not exist").
+  migrate:
+    build:
+      context: .
+      dockerfile: infra/docker/bot.Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
 
   bot:
     build:
@@ -82,6 +103,8 @@ services:
     volumes:
       - app_logs:/var/log/umd
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -92,12 +115,7 @@ services:
     build:
       context: .
       dockerfile: infra/docker/bot.Dockerfile
-    # Тот же образ, что и bot (одинаковый код и зависимости), но другая
-    # команда запуска и без entrypoint.sh — миграции применяет только
-    # bot-контейнер при старте. Если оба контейнера будут одновременно
-    # гонять `alembic upgrade head` при старте — это гонка (race condition),
-    # поэтому у worker миграции явно отключены через override entrypoint.
-    entrypoint: []
+    # Same image as bot (same code and dependencies), different command.
     command: ["arq", "src.infrastructure.queue.worker_settings.WorkerSettings"]
     env_file:
       - .env
@@ -106,11 +124,13 @@ services:
     volumes:
       # Persistent logs, see the bot service: /var/log/umd/worker.log.
       - app_logs:/var/log/umd
-      # Общий с telegram-bot-api (см. комментарий там) — только когда
-      # используется локальный сервер, но монтируем всегда: дёшево и
-      # не требует пересборки при переключении USE_LOCAL_BOT_API.
+      # Downloads (DOWNLOAD_STORAGE_DIR in worker_settings.py). A volume,
+      # so the disk guard and the cleanup cron see one place that
+      # survives a container recreate.
       - download_storage:/tmp/umd-downloads
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -129,3 +149,4 @@ volumes:
   postgres_data:
   download_storage:
   app_logs:
+  telegram_bot_api_data:

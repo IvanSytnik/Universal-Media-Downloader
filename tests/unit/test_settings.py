@@ -197,3 +197,50 @@ def test_blank_sentry_dsn_and_log_dir_mean_off(monkeypatch: pytest.MonkeyPatch) 
 
     assert settings.sentry_dsn is None
     assert settings.log_dir is None
+
+
+# --- Local Bot API credentials ---------------------------------------------
+
+
+def _local_api_settings(**overrides: object) -> Settings:
+    return Settings(
+        bot_token="test-token",  # type: ignore[arg-type]
+        _env_file=None,  # type: ignore[call-arg]
+        **overrides,  # type: ignore[arg-type]
+    )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "missing"),
+    [
+        ({}, "TELEGRAM_API_ID and TELEGRAM_API_HASH"),
+        ({"telegram_api_id": 12345}, "TELEGRAM_API_HASH"),
+        ({"telegram_api_hash": "abc"}, "TELEGRAM_API_ID"),
+        # Blank values from a copied .env.example count as missing.
+        ({"telegram_api_id": "", "telegram_api_hash": ""}, "TELEGRAM_API_ID and TELEGRAM_API_HASH"),
+    ],
+)
+def test_local_bot_api_without_credentials_fails_with_a_clear_message(
+    overrides: dict[str, object], missing: str
+) -> None:
+    with pytest.raises(ValidationError) as info:
+        _local_api_settings(use_local_bot_api=True, **overrides)
+    message = str(info.value)
+    assert f"USE_LOCAL_BOT_API=true requires {missing}:" in message
+    assert "my.telegram.org" in message
+
+
+def test_local_bot_api_with_credentials_is_valid() -> None:
+    settings = _local_api_settings(
+        use_local_bot_api=True, telegram_api_id=12345, telegram_api_hash="abc"
+    )
+    assert settings.telegram_api_id == 12345
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_cloud_bot_api_needs_no_credentials(value: str | None) -> None:
+    settings = _local_api_settings(
+        use_local_bot_api=False, telegram_api_id=value, telegram_api_hash=value
+    )
+    assert settings.telegram_api_id is None
+    assert settings.telegram_api_hash is None

@@ -2,10 +2,10 @@
 #
 # One image for both the bot and the worker (same code, different command).
 #
-# Two stages: the builder resolves Python dependencies into an isolated
-# virtualenv; the runtime stage copies only that venv plus the system
-# binaries yt-dlp needs, so build tooling (uv, compilers, curl) never
-# ships in the final image.
+# Two stages: the builder installs the locked Python dependencies
+# (uv.lock) into an isolated virtualenv; the runtime stage copies only
+# that venv plus the system binaries yt-dlp needs, so build tooling (uv,
+# compilers, curl) never ships in the final image.
 
 # ---------------------------------------------------------------------------
 # Builder
@@ -15,16 +15,19 @@ FROM python:3.13-slim AS builder
 COPY --from=ghcr.io/astral-sh/uv:0.8.22 /uv /usr/local/bin/uv
 
 ENV UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_PYTHON_DOWNLOADS=never
 
 WORKDIR /app
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock ./
 
-# Dependencies only, not the project itself: the code runs from /app/src
-# via PYTHONPATH, so path-relative lookups (locales_dir() resolves
-# parents[3] of src/presentation/telegram/i18n.py) land inside /app.
-RUN uv venv /opt/venv \
-    && uv pip install --python /opt/venv/bin/python --no-cache -r pyproject.toml
+# Exactly the locked versions (--frozen: never re-resolve), dependencies
+# only, not the project itself: the code runs from /app/src via
+# PYTHONPATH, so path-relative lookups (locales_dir() resolves parents[3]
+# of src/presentation/telegram/i18n.py) land inside /app. Updating a
+# dependency is a lock change: `uv lock --upgrade-package yt-dlp`.
+RUN uv sync --frozen --no-dev --no-install-project --no-cache
 
 # ---------------------------------------------------------------------------
 # Runtime
@@ -66,9 +69,9 @@ COPY infra/alembic ./infra/alembic
 # FTL locales: the bot renders them, the worker localizes error messages.
 COPY locales ./locales
 COPY src ./src
-COPY --chmod=755 infra/docker/entrypoint.sh /entrypoint.sh
 
 USER app
 
-ENTRYPOINT ["/entrypoint.sh"]
+# Migrations are not run here: the one-shot `migrate` compose service
+# applies them before bot and worker start (docker-compose.yml).
 CMD ["python", "-m", "src.main"]

@@ -8,11 +8,11 @@ already takes a bare ``locale: str | None`` — the domain doesn't know
 these numbers mean "a Telegram chat" or "an FTL locale code", only that
 they're routing/rendering parameters an implementation needs. This is
 the established pattern in this codebase, not a new exception to the
-Dependency Rule (PROJECT_SPEC §6.1 / TASK_Day11B.md).
+Dependency Rule (docs/architecture.md, Progress bridge).
 
 The implementation (RedisProgressPublisher) folds all of this into one
 JSON event so the Presentation-layer listener never needs a DB round
-trip per progress update — see TASK_Day11B.md's payload decision.
+trip per progress update.
 """
 
 from __future__ import annotations

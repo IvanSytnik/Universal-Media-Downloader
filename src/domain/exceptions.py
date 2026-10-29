@@ -47,6 +47,51 @@ class UnsupportedURLError(DownloaderError):
     error_key = "error-unsupported-site"
 
 
+# Rejection reasons of our own URL validation (url_validation.py). One
+# subclass per reason, each with its own ``error_key``, so the user sees
+# why the link was refused in their language; the exception text stays
+# empty, like every keyed error (bug #6).
+
+
+class EmptyURLError(UnsupportedURLError):
+    """The message contained no link at all."""
+
+    error_key = "error-url-empty"
+
+
+class UnsupportedURLSchemeError(UnsupportedURLError):
+    """Not an http(s) link (``ftp://``, ``file://``, or no scheme)."""
+
+    error_key = "error-url-scheme"
+
+
+class MissingURLHostError(UnsupportedURLError):
+    """An http(s) link without a host (``https:///path``)."""
+
+    error_key = "error-url-no-host"
+
+
+class DomainNotAllowedError(UnsupportedURLError):
+    """The host is outside the domain allowlist. Carries the allowlist
+    (sorted) so the message can name the supported sites — data, not
+    text, like ``FileTooLargeError``."""
+
+    error_key = "error-url-domain-not-allowed"
+
+    def __init__(self, allowed_domains: tuple[str, ...]) -> None:
+        super().__init__()
+        self.allowed_domains = allowed_domains
+
+
+class DomainBlockedError(UnsupportedURLError):
+    """The host is explicitly blocked (``BLOCKED_DOMAINS``), whatever the
+    allowlist says. Deliberately no list of supported sites: a blocked
+    subdomain of an allowed one (``music.youtube.com`` under
+    ``youtube.com``) would read "not supported — supported: youtube.com"."""
+
+    error_key = "error-unsupported-site"
+
+
 class ExtractionError(DownloaderError):
     """yt-dlp (or whatever extractor is behind DownloaderPort) failed to
     retrieve information for an otherwise well-formed URL.
@@ -55,7 +100,7 @@ class ExtractionError(DownloaderError):
     can't confidently place into a more specific subclass surfaces as a
     plain ``ExtractionError`` with the generic ``error_key``. Never put
     the raw yt-dlp message into the text shown to the user — it's
-    diagnostic (see the adapter and bug #6 in HANDOFF); log it, show the
+    diagnostic (see the adapter and bug #6 in docs/architecture.md); log it, show the
     keyed message.
     """
 

@@ -1,7 +1,7 @@
 """Long-lived umd:progress:* listener — Presentation layer, Day 11B.
 
-Runs alongside `dp.start_polling()` in main.py (Option A from
-TASK_Day11B.md: same bot process, direct access to `bot` — no second
+Runs alongside `dp.start_polling()` in main.py (docs/architecture.md,
+Progress bridge: same bot process, direct access to `bot` — no second
 process needed). Subscribes once via PSUBSCRIBE and, for every throttled
 progress event, edits the message identified by the event's own
 (chat_id, message_id) — coordinates that rode in the Redis payload, no DB
@@ -19,7 +19,7 @@ otherwise accumulate for the life of the bot process). The failure
 reason is not rendered here: it arrives as its own message from the
 worker's notifier.
 
-Explicit locale only (HANDOFF bug #10): there is no aiogram I18nContext
+Explicit locale only (bug #10, docs/architecture.md): there is no aiogram I18nContext
 here — no update is in flight — so every render goes through
 ``i18n_core.get(key, locale, **kwargs)`` with an explicit locale, exactly
 like FluentErrorLocalizer on the worker side (fluent_error_localizer.py).
@@ -195,8 +195,11 @@ class TelegramProgressListener:
 
         downloaded_mb = (payload.get("downloaded_bytes") or 0) / (1024 * 1024)
         speed = payload.get("speed")
-        unit = "МБ/с" if locale == "ru" else "MB/s"
-        speed_str = f"{speed / (1024 * 1024):.1f} {unit}" if speed else "?"
+        speed_str = (
+            self._i18n_core.get("progress-speed", locale, speed=f"{speed / (1024 * 1024):.1f}")
+            if speed
+            else "?"
+        )
         return self._i18n_core.get(
             "progress-downloading-nostream",
             locale,

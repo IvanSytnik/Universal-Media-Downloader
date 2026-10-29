@@ -20,7 +20,7 @@ from src.presentation.telegram.formatting import format_preview
 from tests.conftest import FakeI18n
 
 
-def _preview(title: str, uploader: str | None = "Some Channel") -> MediaPreview:
+def _preview(title: str | None, uploader: str | None = "Some Channel") -> MediaPreview:
     return MediaPreview(
         source_url="https://example.com/video",
         title=title,
@@ -62,3 +62,11 @@ async def test_format_preview_handles_missing_uploader(i18n_core) -> None:
     i18n = FakeI18n(i18n_core, "ru")
     result = format_preview(i18n, _preview("Normal Title", uploader=None))
     assert "неизвестно" in result
+
+
+@pytest.mark.parametrize(("locale", "untitled"), [("en", "Untitled"), ("ru", "Без названия")])
+@pytest.mark.asyncio
+async def test_format_preview_without_title_uses_the_locale(i18n_core, locale, untitled) -> None:
+    i18n = FakeI18n(i18n_core, locale)
+    result = format_preview(i18n, _preview(None))
+    assert untitled in result

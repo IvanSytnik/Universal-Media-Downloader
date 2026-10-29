@@ -136,7 +136,8 @@ async def test_get_preview_falls_back_to_default_title(monkeypatch: pytest.Monke
     downloader = _downloader()
     preview = await downloader.get_preview("https://example.com/video")
 
-    assert preview.title == "Без названия"
+    # No title is None here; the card's "Untitled" comes from the locale.
+    assert preview.title is None
     assert preview.duration_seconds is None
     assert preview.media_type == MediaType.UNKNOWN
 
@@ -193,7 +194,7 @@ async def test_get_preview_maps_timeout_to_preview_timeout_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def _raise(url: str, timeout_seconds: int, /) -> dict[str, Any] | None:
-        raise ytdlp_downloader._PreviewTimeoutError("превысило лимит 45 секунд")
+        raise ytdlp_downloader._PreviewTimeoutError("exceeded the 45 s limit")
 
     _install_preview_runner(monkeypatch, _raise)
 
@@ -342,7 +343,7 @@ async def test_download_maps_timeout_to_timeout_error(
         video_tier_value: str | None,
         progress_sink: _Sink = None,
     ) -> DownloadResult:
-        raise ytdlp_downloader._DownloadTimeoutError("превысило лимит 1 секунд")
+        raise ytdlp_downloader._DownloadTimeoutError("exceeded the 1 s limit")
 
     _install_runner(monkeypatch, _raise_timeout)
 

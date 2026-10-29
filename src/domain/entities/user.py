@@ -17,7 +17,7 @@ class User:
     """A platform user.
 
     `telegram_id` is nullable by design: it's one of several possible
-    login methods (see PROJECT_SPEC §6.3 — API keys / JWT will be added
+    login methods (docs/architecture.md, Identity — API keys / JWT will be added
     for Web/Mobile/API clients in Phase 5, linked to the same `id`, not
     replacing it).
 
