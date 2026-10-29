@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-29
+
 ### Added
 
 - `docs/deployment.md`: provider-neutral runbook for a Linux VPS (sizing, firewall, first deployment, moving the bot between Bot API servers with `logOut` / `close`, post-deployment checks, upgrades and rollback, updating yt-dlp through the lock, backups).
@@ -246,6 +248,9 @@ Production hardening, enforced layer boundaries and repository polish.
 - Docker Compose stack with health-checked Postgres and Redis.
 - GitHub Actions CI: ruff, mypy, pytest.
 
+[Unreleased]: https://github.com/IvanSytnik/Universal-Media-Downloader/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/IvanSytnik/Universal-Media-Downloader/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/IvanSytnik/Universal-Media-Downloader/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/IvanSytnik/Universal-Media-Downloader/compare/v0.8.0...v1.0.0
 [0.8.0]: https://github.com/IvanSytnik/Universal-Media-Downloader/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/IvanSytnik/Universal-Media-Downloader/compare/v0.6.0...v0.7.0

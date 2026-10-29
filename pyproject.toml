@@ -1,7 +1,7 @@
 [project]
 name = "universal-media-downloader"
-version = "1.0.0"
-description = "Production-ready Telegram media downloader — SaaS-oriented architecture"
+version = "1.2.0"
+description = "Telegram bot that downloads media with yt-dlp: quality choice, live progress, files up to 2 GB"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Ivan Sytnik" }]
