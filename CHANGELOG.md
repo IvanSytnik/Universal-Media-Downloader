@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `docs/deployment.md`: provider-neutral runbook for a Linux VPS (sizing, firewall, first deployment, moving the bot between Bot API servers with `logOut` / `close`, post-deployment checks, upgrades and rollback, updating yt-dlp through the lock, backups).
 - `WORKER_MAX_JOBS` (default 4): concurrent download jobs per worker, passed to arq's `max_jobs`. It was arq's implicit default of 10.
 - `docs/architecture.md`: layers and the dependency rule (with its two documented exceptions), the two-phase flow, process isolation, the progress bridge, the request status lifecycle, and the numbered engineering pitfalls that code comments refer to.
 - `SECURITY.md`: vulnerability reporting, untrusted input (URLs, callback data, the database), process and file handling, secrets, responsible use.
