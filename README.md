@@ -294,7 +294,14 @@ download history (the data is already stored) → CI/CD deployment and
 metrics. A web or HTTP API front end is considered by the architecture
 but not built.
 
-## Responsible use
+## Contributing
+
+Bug reports, ideas and pull requests are welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the local setup, the checks CI
+runs, the commit format, and how to add a source platform or a port.
+Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Legal / Terms of use
 
 This is an engineering project, not a licence to copy content. Download
 only what you own or are allowed to copy, and respect the terms of
@@ -302,6 +309,12 @@ service of the sites involved. The domain allowlist, rate limits and size
 limits keep the bot a personal tool rather than a public mirror. See
 [SECURITY.md](SECURITY.md) for the security model and how to report a
 vulnerability.
+
+- **You are responsible for what you download.** The bot automates `yt-dlp`; it grants no rights to the content. The person who sends a link and the operator who runs an instance are responsible for complying with copyright law and with the terms of service of the source platform (YouTube, TikTok, Instagram, X, VK and others), which may prohibit downloading.
+- **Running an instance for others** is the operator's decision and responsibility. Do not open an instance to the general public without your own legal review.
+- **Data an instance keeps.** PostgreSQL stores each user's Telegram id and chosen language, and every requested link with its status and timestamps; nothing deletes these rows automatically. Logs are kept in the `app_logs` volume, and errors go to Sentry if `SENTRY_DSN` is set. If other people use your instance, you are responsible for telling them and for complying with the data-protection law that applies to you.
+- **No affiliation.** This project is not affiliated with or endorsed by Telegram or any of the platforms it downloads from. Their names are trademarks of their owners.
+- **No warranty.** The software is provided "as is", without warranty of any kind, under the [MIT License](LICENSE).
 
 ## License and author
 
