@@ -1,0 +1,47 @@
+name: Feature request
+description: Suggest a new feature, platform or improvement.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you are trying to do and what gets in the way today.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How you would like it to work from the user's or operator's side.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other ways to get the same result, including configuration you already tried.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - New source platform
+        - Download formats or quality
+        - Bot UX or messages
+        - Localization
+        - Operations (deployment, logs, monitoring)
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I would like to implement this myself (see CONTRIBUTING.md).

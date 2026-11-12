@@ -1,0 +1,96 @@
+name: Bug report
+description: Something does not work as described in the README.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please **do not** report security problems here. See [SECURITY.md](https://github.com/IvanSytnik/Universal-Media-Downloader/blob/main/SECURITY.md).
+
+        Before pasting logs, remove `BOT_TOKEN`, `TELEGRAM_API_HASH`, `SENTRY_DSN`, passwords and anything else from your `.env`.
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform of the link
+      description: Which site the link you sent to the bot points to.
+      options:
+        - YouTube
+        - TikTok
+        - Instagram
+        - X / Twitter
+        - VK
+        - Other site (name it below)
+        - Not related to a link
+    validations:
+      required: true
+
+  - type: input
+    id: link
+    attributes:
+      label: Example link
+      description: A public link that reproduces the problem, if you can share one. Leave empty for private content.
+      placeholder: https://www.youtube.com/watch?v=...
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did (command, buttons pressed), what the bot answered, and what you expected instead.
+      placeholder: |
+        1. Sent the link
+        2. Tapped "⬇️ Video" → "1080p"
+        3. The card stopped at "⏳ Downloading… 61%" and nothing arrived
+        Expected: the video
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        The bot and worker lines around the failure, e.g. from `docker compose logs --since 15m bot worker`
+        or from `/var/log/umd/{bot,worker}.log` in the `app_logs` volume. Lines are JSON; a `request_id` helps find them.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The release (`version` in `pyproject.toml`) or the commit, from `git describe --tags --always`.
+      placeholder: 1.2.0 or 3e1759b
+    validations:
+      required: true
+
+  - type: input
+    id: ytdlp-version
+    attributes:
+      label: yt-dlp version
+      description: For download or extraction problems, from `docker compose exec worker python -m yt_dlp --version`.
+      placeholder: "2026.08.19"
+
+  - type: dropdown
+    id: profile
+    attributes:
+      label: Bot API profile
+      description: See "Quick start" in the README.
+      options:
+        - minimal (cloud Bot API, 50 MB)
+        - full (local Bot API server, up to 2000 MB)
+        - Not sure
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I removed tokens, passwords and other secrets from everything above.
+          required: true
+        - label: I searched the existing issues and the README's "Limitations" section.
+          required: true

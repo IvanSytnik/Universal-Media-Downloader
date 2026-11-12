@@ -1,7 +1,9 @@
 # Universal Media Downloader
 
-[![CI](https://github.com/IvanSytnik/Universal-Media-Downloader/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/IvanSytnik/Universal-Media-Downloader/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/IvanSytnik/Universal-Media-Downloader/ci.yml?branch=main&label=CI&logo=githubactions&logoColor=white)](https://github.com/IvanSytnik/Universal-Media-Downloader/actions/workflows/ci.yml)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3130/)
+[![aiogram 3](https://img.shields.io/badge/aiogram-3-2CA5E0.svg?logo=telegram&logoColor=white)](https://docs.aiogram.dev/)
+[![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED.svg?logo=docker&logoColor=white)](docker-compose.yml)
 [![Code style: ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Type checked: mypy --strict](https://img.shields.io/badge/mypy-strict-2A6DB2.svg)](https://mypy.readthedocs.io/en/stable/command_line.html#cmdoption-mypy-strict)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
@@ -17,25 +19,91 @@ progress and delivers files of up to 2 GB as playable Telegram videos.
 - **How it is checked:** 686 tests plus 3 PostgreSQL migration tests in CI; `ruff`, `mypy --strict`; a 90% coverage gate on the core layers (99% as of v1.2.0).
 - **Status:** pre-beta. Runs end to end on a local Docker stack; not yet deployed to a server and has no production users.
 
+## Contents
+
+- [Demo](#demo)
+- [Why this is interesting](#why-this-is-interesting)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Tech stack](#tech-stack)
+- [Quick start](#quick-start) · [Configuration](#configuration)
+- [Testing and quality](#testing-and-quality)
+- [Project structure](#project-structure)
+- [Architecture decision records](#architecture-decision-records)
+- [Operations](#operations)
+- [Limitations and roadmap](#limitations-and-roadmap)
+- [Contributing](#contributing)
+- [Legal / Terms of use](#legal--terms-of-use)
+- [License and author](#license-and-author)
+
 ## Demo
 
 <!--
 Screenshots go here (English client, test bot). Expected files:
-  docs/assets/demo-flow.gif        link → preview → quality → progress → ✅ Sent (10–15 s)
-  docs/assets/demo-preview.png     preview card with [Video] [MP3]
-  docs/assets/demo-quality.png     [720p] [1080p] [Back]
-  docs/assets/demo-progress.png    progress card, "Downloading… 61%"
-  docs/assets/demo-delivered.png   "✅ Sent" and the inline video player
-  docs/assets/demo-error.png       a localized refusal (unsupported site)
+  docs/screenshots/demo-flow.gif        link → preview → quality → progress → ✅ Sent (10–15 s)
+  docs/screenshots/demo-preview.png     preview card with [Video] [MP3]
+  docs/screenshots/demo-quality.png     [720p] [1080p] [Back]
+  docs/screenshots/demo-progress.png    progress card, "Downloading… 61%"
+  docs/screenshots/demo-delivered.png   "✅ Sent" and the inline video player
+  docs/screenshots/demo-error.png       a localized refusal (unsupported site)
 
-![Download flow](docs/assets/demo-flow.gif)
+![Download flow](docs/screenshots/demo-flow.gif)
 
 | Preview | Quality | Progress | Delivered |
 |---|---|---|---|
-| ![](docs/assets/demo-preview.png) | ![](docs/assets/demo-quality.png) | ![](docs/assets/demo-progress.png) | ![](docs/assets/demo-delivered.png) |
+| ![](docs/screenshots/demo-preview.png) | ![](docs/screenshots/demo-quality.png) | ![](docs/screenshots/demo-progress.png) | ![](docs/screenshots/demo-delivered.png) |
 -->
 
-*Screenshots are being prepared.*
+*Screenshots are being prepared.* Until then, here is an example dialog
+built from the bot's English messages
+([`locales/en/messages.ftl`](locales/en/messages.ftl)). Values in angle
+brackets come from the source site; buttons are shown in `[ ]`.
+
+**Example dialog** (link → quality → file):
+
+```text
+You:  https://www.youtube.com/watch?v=<video id>
+
+Bot:  🔍 Fetching video info…
+      (the same message turns into the preview card)
+
+Bot:  📹 <video title>
+      Author: <channel name>
+      Duration: 4:13
+      Type: video
+      [ ⬇️ Video ] [ 🎵 MP3 ]
+      [ ❌ Cancel ]
+
+You:  taps ⬇️ Video
+Bot:  (the buttons under the card are replaced in place)
+      [ 720p ] [ 1080p ]
+      [ ◀️ Back ]
+
+You:  taps 1080p
+Bot:  📹 <video title>
+      Author: <channel name>
+      Duration: 4:13
+      Type: video
+
+      ⏳ Download started — I'll send the file here when it's ready.
+
+Bot:  (the worker then edits the same card)
+      ⏳ Downloading… 61%
+      ⏳ Sending the file…
+
+Bot:  <video file named after the title, playable inline>
+
+Bot:  (the card's final state)
+      ✅ Sent
+```
+
+The quality step depends on the source: `[720p] [1080p]` for 1080p and
+above, `[720p] [<height>p (best)]` between the two, and none at 720p or
+below, where *Video* downloads the best inline-playable quality at once.
+*MP3* skips the quality step and shows `⏳ Converting to MP3…` before
+sending. If something goes wrong, the card ends in `❌ Failed` and the
+reason arrives as a separate message, for example
+`This video was removed or no longer exists. Double-check the link.`
 
 ## Why this is interesting
 
@@ -197,6 +265,28 @@ most likely to change:
 | `POSTGRES_PASSWORD` | `umd` | change it anywhere but a laptop |
 | `SENTRY_DSN` | empty | set to enable error reporting |
 
+<details>
+<summary>All other variables</summary>
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ENVIRONMENT` | `local` | `local`, `staging` or `production` |
+| `LOG_LEVEL` | `INFO` | log level for all services |
+| `LOG_DIR` | unset (stdout only); `/var/log/umd` in Compose | directory for the rotating JSON log files |
+| `LOG_FILE_MAX_MB`, `LOG_FILE_BACKUPS` | `50`, `10` | rotation: size per file, files kept |
+| `LOCAL_BOT_API_BASE_URL` | `http://telegram-bot-api:8081` | address of the local Bot API server (full profile) |
+| `DEFAULT_LOCALE` | `en` | used when the user has not run `/language` and Telegram's language is not `en` or `ru` |
+| `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER` | `postgres`, `5432`, `umd`, `umd` | database connection inside the Docker network |
+| `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB` | `redis`, `6379`, `0` | Redis connection inside the Docker network |
+| `HOST_POSTGRES_PORT`, `HOST_REDIS_PORT` | `5433`, `6380` | ports published on `127.0.0.1` for `psql` / `redis-cli` (Compose only) |
+| `PREVIEW_CONTEXT_TTL_SECONDS` | `600` | how long a preview card's buttons stay usable |
+| `PREVIEW_TIMEOUT_SECONDS` | `60` | one preview extraction; the process is killed on expiry |
+| `DOWNLOAD_TIMEOUT_SECONDS` | `1800` | one download; keep it below the worker's `job_timeout` (2100 s) |
+| `FILE_UPLOAD_TIMEOUT_SECONDS` | `1800` | uploading one file to Telegram |
+| `STALE_REQUEST_GRACE_SECONDS` | `300` | added to `job_timeout` before the reaper fails a stuck request |
+
+</details>
+
 ## Testing and quality
 
 ```bash
@@ -270,7 +360,14 @@ download history (the data is already stored) → CI/CD deployment and
 metrics. A web or HTTP API front end is considered by the architecture
 but not built.
 
-## Responsible use
+## Contributing
+
+Bug reports, ideas and pull requests are welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the local setup, the checks CI
+runs, the commit format, and how to add a source platform or a port.
+Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Legal / Terms of use
 
 This is an engineering project, not a licence to copy content. Download
 only what you own or are allowed to copy, and respect the terms of
@@ -278,6 +375,12 @@ service of the sites involved. The domain allowlist, rate limits and size
 limits keep the bot a personal tool rather than a public mirror. See
 [SECURITY.md](SECURITY.md) for the security model and how to report a
 vulnerability.
+
+- **You are responsible for what you download.** The bot automates `yt-dlp`; it grants no rights to the content. The person who sends a link and the operator who runs an instance are responsible for complying with copyright law and with the terms of service of the source platform (YouTube, TikTok, Instagram, X, VK and others), which may prohibit downloading.
+- **Running an instance for others** is the operator's decision and responsibility. Do not open an instance to the general public without your own legal review.
+- **Data an instance keeps.** PostgreSQL stores each user's Telegram id and chosen language, and every requested link with its status and timestamps; nothing deletes these rows automatically. Logs are kept in the `app_logs` volume, and errors go to Sentry if `SENTRY_DSN` is set. If other people use your instance, you are responsible for telling them and for complying with the data-protection law that applies to you.
+- **No affiliation.** This project is not affiliated with or endorsed by Telegram or any of the platforms it downloads from. Their names are trademarks of their owners.
+- **No warranty.** The software is provided "as is", without warranty of any kind, under the [MIT License](LICENSE).
 
 ## License and author
 

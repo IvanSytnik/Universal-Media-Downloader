@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `CONTRIBUTING.md`: local setup through the Makefile or uv, the checks CI runs, migration tests, commit format, and how to add a source platform or a port.
+- `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1).
+- GitHub issue forms (bug report with platform, logs and version; feature request) and a pull request template.
+
+### Changed
+
+- README: table of contents, an example dialog built from the English locale, a table of every `.env.example` variable, *Contributing* and *Legal / Terms of use* sections (the latter extends *Responsible use*), and shields.io badges for CI and the stack.
+- `SECURITY.md`: supported versions (security fixes for the latest minor version only).
+
 ## [1.2.0] - 2026-10-29
 
 ### Added

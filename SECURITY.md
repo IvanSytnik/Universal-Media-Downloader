@@ -1,5 +1,15 @@
 # Security
 
+## Supported Versions
+
+Security fixes are released only for the latest minor version and land
+on `main`. Older versions do not get fixes; upgrade to the latest release.
+
+| Version | Supported |
+|---|---|
+| 1.2.x (`main`) | ✅ |
+| < 1.2 | ❌ |
+
 ## Reporting a vulnerability
 
 Please do not open a public issue for a security problem. Use GitHub's

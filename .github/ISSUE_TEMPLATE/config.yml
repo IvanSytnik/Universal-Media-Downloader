@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/IvanSytnik/Universal-Media-Downloader/security/advisories/new
+    about: Please do not open a public issue. Report it privately through a GitHub security advisory.
