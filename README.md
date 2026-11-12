@@ -199,6 +199,28 @@ most likely to change:
 | `POSTGRES_PASSWORD` | `umd` | change it anywhere but a laptop |
 | `SENTRY_DSN` | empty | set to enable error reporting |
 
+<details>
+<summary>All other variables</summary>
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ENVIRONMENT` | `local` | `local`, `staging` or `production` |
+| `LOG_LEVEL` | `INFO` | log level for all services |
+| `LOG_DIR` | unset (stdout only); `/var/log/umd` in Compose | directory for the rotating JSON log files |
+| `LOG_FILE_MAX_MB`, `LOG_FILE_BACKUPS` | `50`, `10` | rotation: size per file, files kept |
+| `LOCAL_BOT_API_BASE_URL` | `http://telegram-bot-api:8081` | address of the local Bot API server (full profile) |
+| `DEFAULT_LOCALE` | `en` | used when the user has not run `/language` and Telegram's language is not `en` or `ru` |
+| `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER` | `postgres`, `5432`, `umd`, `umd` | database connection inside the Docker network |
+| `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB` | `redis`, `6379`, `0` | Redis connection inside the Docker network |
+| `HOST_POSTGRES_PORT`, `HOST_REDIS_PORT` | `5433`, `6380` | ports published on `127.0.0.1` for `psql` / `redis-cli` (Compose only) |
+| `PREVIEW_CONTEXT_TTL_SECONDS` | `600` | how long a preview card's buttons stay usable |
+| `PREVIEW_TIMEOUT_SECONDS` | `60` | one preview extraction; the process is killed on expiry |
+| `DOWNLOAD_TIMEOUT_SECONDS` | `1800` | one download; keep it below the worker's `job_timeout` (2100 s) |
+| `FILE_UPLOAD_TIMEOUT_SECONDS` | `1800` | uploading one file to Telegram |
+| `STALE_REQUEST_GRACE_SECONDS` | `300` | added to `job_timeout` before the reaper fails a stuck request |
+
+</details>
+
 ## Testing and quality
 
 ```bash
