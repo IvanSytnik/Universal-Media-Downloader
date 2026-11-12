@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - README: table of contents, an example dialog built from the English locale, a table of every `.env.example` variable, *Contributing* and *Legal / Terms of use* sections (the latter extends *Responsible use*), and shields.io badges for CI and the stack.
+- `SECURITY.md`: supported versions (security fixes for the latest minor version only).
 
 ## [1.2.0] - 2026-10-29
 
