@@ -19,25 +19,91 @@ progress and delivers files of up to 2 GB as playable Telegram videos.
 - **How it is checked:** 686 tests plus 3 PostgreSQL migration tests in CI; `ruff`, `mypy --strict`; a 90% coverage gate on the core layers (99% as of v1.2.0).
 - **Status:** pre-beta. Runs end to end on a local Docker stack; not yet deployed to a server and has no production users.
 
+## Contents
+
+- [Demo](#demo)
+- [Why this is interesting](#why-this-is-interesting)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Tech stack](#tech-stack)
+- [Quick start](#quick-start) · [Configuration](#configuration)
+- [Testing and quality](#testing-and-quality)
+- [Project structure](#project-structure)
+- [Architecture decision records](#architecture-decision-records)
+- [Operations](#operations)
+- [Limitations and roadmap](#limitations-and-roadmap)
+- [Contributing](#contributing)
+- [Legal / Terms of use](#legal--terms-of-use)
+- [License and author](#license-and-author)
+
 ## Demo
 
 <!--
 Screenshots go here (English client, test bot). Expected files:
-  docs/assets/demo-flow.gif        link → preview → quality → progress → ✅ Sent (10–15 s)
-  docs/assets/demo-preview.png     preview card with [Video] [MP3]
-  docs/assets/demo-quality.png     [720p] [1080p] [Back]
-  docs/assets/demo-progress.png    progress card, "Downloading… 61%"
-  docs/assets/demo-delivered.png   "✅ Sent" and the inline video player
-  docs/assets/demo-error.png       a localized refusal (unsupported site)
+  docs/screenshots/demo-flow.gif        link → preview → quality → progress → ✅ Sent (10–15 s)
+  docs/screenshots/demo-preview.png     preview card with [Video] [MP3]
+  docs/screenshots/demo-quality.png     [720p] [1080p] [Back]
+  docs/screenshots/demo-progress.png    progress card, "Downloading… 61%"
+  docs/screenshots/demo-delivered.png   "✅ Sent" and the inline video player
+  docs/screenshots/demo-error.png       a localized refusal (unsupported site)
 
-![Download flow](docs/assets/demo-flow.gif)
+![Download flow](docs/screenshots/demo-flow.gif)
 
 | Preview | Quality | Progress | Delivered |
 |---|---|---|---|
-| ![](docs/assets/demo-preview.png) | ![](docs/assets/demo-quality.png) | ![](docs/assets/demo-progress.png) | ![](docs/assets/demo-delivered.png) |
+| ![](docs/screenshots/demo-preview.png) | ![](docs/screenshots/demo-quality.png) | ![](docs/screenshots/demo-progress.png) | ![](docs/screenshots/demo-delivered.png) |
 -->
 
-*Screenshots are being prepared.*
+*Screenshots are being prepared.* Until then, here is an example dialog
+built from the bot's English messages
+([`locales/en/messages.ftl`](locales/en/messages.ftl)). Values in angle
+brackets come from the source site; buttons are shown in `[ ]`.
+
+**Example dialog** (link → quality → file):
+
+```text
+You:  https://www.youtube.com/watch?v=<video id>
+
+Bot:  🔍 Fetching video info…
+      (the same message turns into the preview card)
+
+Bot:  📹 <video title>
+      Author: <channel name>
+      Duration: 4:13
+      Type: video
+      [ ⬇️ Video ] [ 🎵 MP3 ]
+      [ ❌ Cancel ]
+
+You:  taps ⬇️ Video
+Bot:  (the buttons under the card are replaced in place)
+      [ 720p ] [ 1080p ]
+      [ ◀️ Back ]
+
+You:  taps 1080p
+Bot:  📹 <video title>
+      Author: <channel name>
+      Duration: 4:13
+      Type: video
+
+      ⏳ Download started — I'll send the file here when it's ready.
+
+Bot:  (the worker then edits the same card)
+      ⏳ Downloading… 61%
+      ⏳ Sending the file…
+
+Bot:  <video file named after the title, playable inline>
+
+Bot:  (the card's final state)
+      ✅ Sent
+```
+
+The quality step depends on the source: `[720p] [1080p]` for 1080p and
+above, `[720p] [<height>p (best)]` between the two, and none at 720p or
+below, where *Video* downloads the best inline-playable quality at once.
+*MP3* skips the quality step and shows `⏳ Converting to MP3…` before
+sending. If something goes wrong, the card ends in `❌ Failed` and the
+reason arrives as a separate message, for example
+`This video was removed or no longer exists. Double-check the link.`
 
 ## Why this is interesting
 
