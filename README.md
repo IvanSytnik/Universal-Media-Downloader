@@ -1,7 +1,9 @@
 # Universal Media Downloader
 
-[![CI](https://github.com/IvanSytnik/Universal-Media-Downloader/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/IvanSytnik/Universal-Media-Downloader/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/IvanSytnik/Universal-Media-Downloader/ci.yml?branch=main&label=CI&logo=githubactions&logoColor=white)](https://github.com/IvanSytnik/Universal-Media-Downloader/actions/workflows/ci.yml)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3130/)
+[![aiogram 3](https://img.shields.io/badge/aiogram-3-2CA5E0.svg?logo=telegram&logoColor=white)](https://docs.aiogram.dev/)
+[![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED.svg?logo=docker&logoColor=white)](docker-compose.yml)
 [![Code style: ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Type checked: mypy --strict](https://img.shields.io/badge/mypy-strict-2A6DB2.svg)](https://mypy.readthedocs.io/en/stable/command_line.html#cmdoption-mypy-strict)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
