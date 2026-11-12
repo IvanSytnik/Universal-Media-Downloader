@@ -1,8 +1,8 @@
 """StoragePort — domain interface for where downloaded files live
 temporarily before being sent to the user, and how they get cleaned up.
 
-Day 5 implementation is local disk (see PROJECT_SPEC §6.2 — S3/MinIO is
-explicitly Phase 7, not pulled in early "just in case").
+Day 5 implementation is local disk (docs/architecture.md, Large-file delivery —
+object storage is not pulled in early "just in case").
 """
 
 from __future__ import annotations

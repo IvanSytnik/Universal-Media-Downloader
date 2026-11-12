@@ -47,7 +47,8 @@ def delivery_filename(title: str | None, path: Path) -> str:
 
 
 def _sanitize(title: str) -> str:
-    # NFC first: a decomposed "й" is two code points and more bytes.
+    # NFC first: a decomposed letter (U+0438 + combining breve U+0306,
+    # composed U+0439) is two code points and more bytes.
     text = unicodedata.normalize("NFC", title)
     chars = (
         " " if ch in _FORBIDDEN else ch

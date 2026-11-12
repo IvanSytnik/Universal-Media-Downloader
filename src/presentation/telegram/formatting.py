@@ -11,7 +11,8 @@ being f-string-interpolated.
 
 Day 10: ``format_download_error`` centralizes mapping a categorized
 downloader error to a localized message — one place, so /preview and the
-guided flow can't diverge (DRY).
+guided flow can't diverge (DRY). Our own URL validation goes through it
+too: every rejection reason is a keyed ``UnsupportedURLError`` subclass.
 """
 
 from __future__ import annotations
@@ -21,7 +22,13 @@ from html import escape as html_escape
 from aiogram_i18n import I18nContext
 
 from src.config.settings import Settings
-from src.domain.exceptions import DownloaderError, ExtractionError, FileTooLargeError
+from src.domain.exceptions import (
+    DomainNotAllowedError,
+    DownloaderError,
+    ExtractionError,
+    FileTooLargeError,
+    UnsupportedURLError,
+)
 from src.domain.value_objects.media_preview import MediaPreview
 
 
@@ -63,7 +70,7 @@ def format_preview(i18n: I18nContext, preview: MediaPreview) -> str:
     # untrusted external data. The bot's default parse_mode is HTML, so we
     # html-escape BEFORE handing the values to Fluent (Fluent itself does
     # no HTML escaping). Same reasoning as before Day 9.
-    title = html_escape(preview.title)
+    title = html_escape(preview.title) if preview.title else i18n.get("preview-title-unknown")
     uploader = (
         html_escape(preview.uploader) if preview.uploader else i18n.get("preview-uploader-unknown")
     )
@@ -86,7 +93,9 @@ def format_retry_after(i18n: I18nContext, seconds: int) -> str:
     return i18n.get("rate-limit-minutes", minutes=minutes)
 
 
-def format_download_error(i18n: I18nContext, exc: DownloaderError) -> str:
+def format_download_error(
+    i18n: I18nContext, exc: DownloaderError, *, list_supported_sites: bool = True
+) -> str:
     """Localize a categorized downloader error (Day 10).
 
     Single source of truth for the Presentation side (DRY) — both
@@ -94,9 +103,12 @@ def format_download_error(i18n: I18nContext, exc: DownloaderError) -> str:
     exception types to keys themselves.
 
     Every ``DownloaderError`` carries a semantic ``error_key`` (defined on
-    the base classes), so the mapping is just "read the key". The one
-    special case is ``FileTooLargeError``, whose key interpolates the
-    estimated size and limit — passed as Fluent arguments.
+    the base classes), so the mapping is just "read the key". The
+    special cases carry data passed as Fluent arguments:
+    ``FileTooLargeError`` (estimated size and limit) and
+    ``DomainNotAllowedError`` (the supported sites). With
+    ``list_supported_sites=False`` — a callback alert, 200 characters at
+    most — the latter falls back to the short ``error-unsupported-site``.
 
     The raw ``str(exc)`` is deliberately NOT used: for categorized errors
     it's empty or diagnostic, never user-facing (bug #6).
@@ -104,4 +116,8 @@ def format_download_error(i18n: I18nContext, exc: DownloaderError) -> str:
     error_key = getattr(exc, "error_key", ExtractionError.error_key)
     if isinstance(exc, FileTooLargeError):
         return i18n.get(error_key, estimated_mb=exc.estimated_mb, limit_mb=exc.limit_mb)
+    if isinstance(exc, DomainNotAllowedError):
+        if not list_supported_sites:
+            return i18n.get(UnsupportedURLError.error_key)
+        return i18n.get(error_key, domains=", ".join(exc.allowed_domains))
     return i18n.get(error_key)

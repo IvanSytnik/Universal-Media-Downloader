@@ -6,8 +6,8 @@ into control flow, per the Day 9 architecture discussion):
 
 The two main-menu buttons are a *reply* keyboard, which Telegram gives no
 callback_data — they can only be routed by their visible TEXT. Once that
-text is localized, "⬇️ Скачать" and "⬇️ Download" are the same logical
-button. A user can also still have an old keyboard (rendered in a
+text is localized, the Russian and the English ``btn-download`` labels
+are the same logical button. A user can also still have an old keyboard (rendered in a
 previous locale) at the bottom of the chat after switching languages. So
 matching a single constant string is wrong; we match against the SET of
 all translations of the button key, across every enabled locale. That
@@ -16,8 +16,8 @@ injected into handlers as ``button_translations`` — see bot.py/main.py.
 
 Day 10 — two DISTINCT origins of ``UnsupportedURLError`` are kept apart:
 1. Our own allowlist validator (validate_url_against_allowlist) raises it
-   BEFORE yt-dlp runs, with a safe, meaningful ``reason`` — shown via the
-   ``error-bad-url`` key (reason preserved: it's our text, not yt-dlp's).
+   BEFORE yt-dlp runs, as a subclass per rejection reason, each with its
+   own ``error_key`` — shown via ``format_download_error`` like the rest.
 2. The downloader/classifier raises categorized errors (including
    ``UnsupportedURLError`` for a genuinely unsupported site) — shown via
    ``format_download_error``, which reads ``error_key`` and never leaks
@@ -145,8 +145,8 @@ async def _show_preview(
             url, settings.allowed_domains_set, settings.blocked_domains_set
         )
     except UnsupportedURLError as exc:
-        # Origin 1: OUR validator. `reason` is our own safe text — keep it.
-        await message.answer(i18n.get("error-bad-url", reason=html_escape(str(exc))))
+        # Origin 1: OUR validator — the subclass says why (error_key).
+        await message.answer(format_download_error(i18n, exc))
         return
 
     if message.from_user is not None:
@@ -418,7 +418,10 @@ async def handle_confirm_download(
             return
         except UnsupportedURLError as exc:
             # Our validator again (RequestDownloadUseCase re-validates).
-            await callback.answer(i18n.get("error-bad-url", reason=str(exc)[:150]), show_alert=True)
+            # An alert holds 200 characters: no list of supported sites,
+            # and the cut stays as a safety net.
+            alert = format_download_error(i18n, exc, list_supported_sites=False)
+            await callback.answer(alert[:150], show_alert=True)
             return
         except DownloadEnqueueError as exc:
             # The card becomes the failure record: the token is spent, so

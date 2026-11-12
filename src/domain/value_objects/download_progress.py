@@ -4,7 +4,7 @@ Day 11B. Pure domain value object: no Telegram, no yt-dlp, no transport
 concepts (chat_id/message_id/language are NOT here — those are delivery
 routing details and stay in the payload that carries this object to
 ProgressPublisherPort, see its docstring; contrast with format_kind,
-which IS a domain property — PROJECT_SPEC §6.1 / TASK_Day11B.md).
+which IS a domain property — docs/architecture.md, Progress bridge).
 
 ``percent`` is None whenever ``total_bytes`` is None (a stream yt-dlp
 can't size up front) — callers must render bytes/speed instead of a

@@ -5,7 +5,7 @@ payload bundles DownloadProgress's own fields with the routing/rendering
 extras (chat_id, message_id, language) that ProgressPublisherPort takes
 as separate parameters (see that port's docstring for why this isn't a
 Dependency Rule violation) — the listener needs all of it in one message
-to avoid a DB round trip per update (TASK_Day11B.md payload decision).
+to avoid a DB round trip per update (docs/architecture.md, Progress bridge).
 
 Uses whatever ``Redis``-compatible client is injected. The worker doesn't
 open a dedicated connection for this: ``ctx["redis"]`` (arq's own

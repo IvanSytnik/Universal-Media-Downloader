@@ -5,7 +5,7 @@ the Telegram Presentation layer uses (built via
 ``src.presentation.telegram.i18n.create_i18n_core``), but calls it with
 an EXPLICIT locale every time. This is mandatory outside an aiogram
 update context: without an ``I18nContext`` in the contextvar, calling the
-core without a locale raises ``LookupError`` (HANDOFF bug #10 — the exact
+core without a locale raises ``LookupError`` (bug #10, docs/architecture.md — the exact
 class of failure that broke startup in hotfix 9.1). The worker has no
 such context, so every call here passes the locale positionally.
 

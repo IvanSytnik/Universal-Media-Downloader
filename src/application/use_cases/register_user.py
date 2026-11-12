@@ -20,6 +20,6 @@ class RegisterUserUseCase:
     async def execute(self, telegram_id: int, language: str | None = None) -> User:
         existing = await self._user_repository.get_by_telegram_id(telegram_id)
         if existing is not None:
-            return existing  # возвращающийся юзер сохраняет свой язык
+            return existing  # a returning user keeps their language
         new_user = User.create_from_telegram(telegram_id, language=language)
         return await self._user_repository.create(new_user)

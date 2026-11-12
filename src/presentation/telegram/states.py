@@ -12,7 +12,8 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class DownloadFlow(StatesGroup):
-    # Set after the user taps "⬇️ Скачать": the next message they send
-    # is treated as the URL to preview. Cleared as soon as a URL (valid
-    # or not) arrives, so the user is never trapped in the state.
+    # Set after the user taps the ``btn-download`` button: the next
+    # message they send is treated as the URL to preview. Cleared as soon
+    # as a URL (valid or not) arrives, so the user is never trapped in
+    # the state.
     waiting_for_url = State()

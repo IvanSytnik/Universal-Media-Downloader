@@ -1,6 +1,6 @@
 """MediaPreview — metadata about a piece of media, fetched WITHOUT
 downloading it. This is the result of the two-phase download flow
-decided in PROJECT_SPEC §6.4: preview first, actual download later
+(docs/architecture.md, Two-phase flow): preview first, actual download later
 (Day 5), only after the user confirms and tariff limits are checked.
 
 Day 11C (v2) adds two facts the format choice is decided from, both
@@ -27,7 +27,7 @@ from src.domain.value_objects.enums import MediaType
 @dataclass(frozen=True, slots=True)
 class MediaPreview:
     source_url: str
-    title: str
+    title: str | None
     duration_seconds: int | None
     uploader: str | None
     thumbnail_url: str | None

@@ -140,7 +140,7 @@ async def main() -> None:
     )
 
     # Day 11B: long-lived umd:progress:* listener, same process/same bot
-    # (Option A, TASK_Day11B.md) — reuses redis_client (a pubsub()
+    # (docs/architecture.md, Progress bridge) — reuses redis_client (a pubsub()
     # connection is a separate connection from the same pool, standard
     # usage) and the already-started i18n_core for explicit-locale
     # rendering (bug #10 — no I18nContext exists in this background task).

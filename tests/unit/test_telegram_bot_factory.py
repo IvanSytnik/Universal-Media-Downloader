@@ -28,7 +28,12 @@ def test_default_bot_uses_default_telegram_api_base() -> None:
 
 def test_local_bot_api_enabled_points_session_at_local_server() -> None:
     bot = create_telegram_bot(
-        _settings(use_local_bot_api=True, local_bot_api_base_url="http://test-server:8081")
+        _settings(
+            use_local_bot_api=True,
+            local_bot_api_base_url="http://test-server:8081",
+            telegram_api_id=12345,
+            telegram_api_hash="test-hash",
+        )
     )
 
     assert "test-server:8081" in bot.session.api.base

@@ -11,7 +11,7 @@ failure messages, but has no aiogram ``I18nContext`` (separate process,
 no update in flight). It therefore builds the SAME Fluent core the
 Telegram side uses and wraps it in ``FluentErrorLocalizer``, which always
 resolves keys with an EXPLICIT locale (mandatory outside an update
-context — HANDOFF bug #10/#11). ``create_i18n_core().startup()`` is a
+context — bug #10/#11, docs/architecture.md). ``create_i18n_core().startup()`` is a
 COROUTINE and must be awaited before the core is used — done here at
 worker startup, mirroring main.py.
 
@@ -149,6 +149,7 @@ class WorkerSettings:
     on_startup = startup
     on_shutdown = shutdown
     job_timeout = JOB_TIMEOUT_SECONDS  # see the constant's comment
+    max_jobs = settings.worker_max_jobs
     # Heartbeat for the Compose healthcheck (`arq --check`). arq's default
     # of 3600s would let a dead worker look healthy for up to an hour.
     health_check_interval = 60

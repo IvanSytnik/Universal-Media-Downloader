@@ -1,6 +1,6 @@
 """NotifierPort — domain interface for telling a user about the outcome
 of their download. Deliberately not called "TelegramNotifier" at this
-layer: the domain doesn't know Telegram exists (PROJECT_SPEC §6.1 —
+layer: the domain doesn't know Telegram exists (docs/architecture.md, Layers —
 Downloader must be independent from Telegram; the same principle
 applies to notifications, for the same reason: a future Web/API client
 will need a different notifier behind the same contract).

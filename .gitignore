@@ -1,4 +1,6 @@
 .env
+.env.*
+!.env.example
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -13,20 +15,6 @@ build/
 htmlcov/
 .DS_Store
 postgres_data/
-
-# local dev notes
-CLAUDE.md
-AGENTS.md
-HANDOFF.md
-PROJECT_MEMORY.md
-AUDIT_REPORT.md
-.claude/
-CLAUDE_CODE_KICKOFF.md
-TASK_*.md
-STRUCTURE.md
-CHANGES_*.md
-NEW_CHAT_KICKOFF*.md
-STRUCTURE_delta*.md
 
 # coverage
 .coverage.*

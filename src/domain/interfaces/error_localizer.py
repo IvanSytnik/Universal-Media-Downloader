@@ -12,7 +12,7 @@ The clean fix keeps the Dependency Rule intact: the Application layer
 depends on THIS domain interface, not on aiogram-i18n or Fluent. The
 infrastructure provides an implementation backed by the same FTL files
 the Telegram Presentation layer uses, called with an EXPLICIT locale
-(mandatory outside an update context — see HANDOFF bug #10).
+(mandatory outside an update context — see bug #10, docs/architecture.md).
 
 The ``locale`` argument is the user's stored language (``User.language``,
 Day 9), or ``None`` to mean "use the default locale" — the implementation

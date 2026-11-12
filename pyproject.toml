@@ -1,7 +1,7 @@
 [project]
 name = "universal-media-downloader"
-version = "1.0.0"
-description = "Production-ready Telegram media downloader — SaaS-oriented architecture"
+version = "1.2.0"
+description = "Telegram bot that downloads media with yt-dlp: quality choice, live progress, files up to 2 GB"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Ivan Sytnik" }]
@@ -18,7 +18,10 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0,<3.0",
     "alembic>=1.13,<2.0",
     "arq>=0.26,<1.0",
-    "yt-dlp>=2026.08.19",
+    # [default] brings yt-dlp-ejs, pinned to the version this yt-dlp release
+    # expects: the YouTube JS challenge solver deno runs. Without it
+    # yt-dlp warns "n challenge solving failed" and formats go missing.
+    "yt-dlp[default]>=2026.08.19",
     # Opt-in error reporting (SENTRY_DSN); inert when unset. ADR 0006.
     "sentry-sdk>=2.20,<3",
 ]

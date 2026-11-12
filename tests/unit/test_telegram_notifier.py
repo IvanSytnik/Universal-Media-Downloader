@@ -161,7 +161,7 @@ async def test_upload_without_title_keeps_the_id_name(tmp_path: Path) -> None:
 async def test_send_file_rejects_oversized_file(tmp_path: Path) -> None:
     bot = AsyncMock()
 
-    with pytest.raises(NotifierError, match="слишком большой"):
+    with pytest.raises(NotifierError, match="too large"):
         await _notifier(bot).send_file(1, _video(_file(tmp_path, TEST_MAX_FILE_SIZE_BYTES + 1)))
 
     bot.send_video.assert_not_called()
@@ -178,7 +178,7 @@ async def test_send_file_respects_injected_limit_not_a_hardcoded_one(tmp_path: P
     # it's far under the old hardcoded 50MB constant.
     notifier = _notifier(bot, max_bytes=1 * 1024 * 1024)
 
-    with pytest.raises(NotifierError, match="слишком большой"):
+    with pytest.raises(NotifierError, match="too large"):
         await notifier.send_file(1, _video(_file(tmp_path, 2 * 1024 * 1024)))
 
 

@@ -12,8 +12,8 @@ aiogram ``I18nContext`` (it's a separate process with no update in
 flight), so it can't localize the way the Telegram handlers do. Instead
 it depends on ``ErrorLocalizerPort``: the categorized downloader
 exception carries a semantic ``error_key``, and the localizer turns that
-key + the user's stored language into a message. This replaces the old
-``f"Не удалось скачать: {exc}"`` — which was both hardcoded to one
+key + the user's stored language into a message. This replaces an
+f-string "download failed: {exc}" that was both hardcoded to one
 language in the Application layer AND leaked the raw exception text to
 the user (bug #6).
 

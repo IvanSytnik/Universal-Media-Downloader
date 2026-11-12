@@ -96,6 +96,36 @@ async def test_handle_message_edits_with_nostream_text(i18n_core) -> None:
     assert text == i18n_core.get("progress-downloading-nostream", "en", mb=2.0, speed="1.0 MB/s")
 
 
+@pytest.mark.parametrize(("locale", "speed"), [("en", "1.5 MB/s"), ("ru", "1.5 МБ/с")])
+@pytest.mark.asyncio
+async def test_nostream_speed_unit_comes_from_the_locale(i18n_core, locale, speed) -> None:
+    bot = _CapturingBot()
+    listener = TelegramProgressListener(
+        bot=bot,
+        redis=object(),
+        i18n_core=i18n_core,
+        default_locale=DEFAULT_LOCALE,  # type: ignore[arg-type]
+    )
+    message = _pmessage(
+        "umd:progress:req-3",
+        {
+            "percent": None,
+            "downloaded_bytes": 1024 * 1024,
+            "total_bytes": None,
+            "speed": 1.5 * 1024 * 1024,
+            "eta": None,
+            "chat_id": 1,
+            "message_id": 2,
+            "language": locale,
+        },
+    )
+
+    await listener._handle_message(message)
+
+    (_, _, text) = bot.edits[0]
+    assert f"({speed})" in text
+
+
 @pytest.mark.asyncio
 async def test_handle_message_ignores_non_pmessage(i18n_core) -> None:
     bot = _CapturingBot()

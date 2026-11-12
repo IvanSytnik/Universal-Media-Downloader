@@ -1,5 +1,5 @@
 """DownloaderPort — domain interface for anything that can fetch media
-metadata/content. No mention of yt-dlp here; PROJECT_SPEC §6.1 requires
+metadata/content. No mention of yt-dlp here; the dependency rule (docs/architecture.md) requires
 the downloader to be completely independent from any specific extractor
 implementation, not just from Telegram.
 
@@ -48,7 +48,7 @@ class DownloaderPort(Protocol):
         Returns the downloaded file with its media facts (Day 11D-1:
         dimensions, duration, title, uploader — each None when unknown). Implementations must
         enforce `options.timeout_seconds` with a real cancellation
-        guarantee (not just "give up waiting") — see PROJECT_SPEC §6.4
+        guarantee (not just "give up waiting") — see docs/architecture.md (Process isolation)
         and YtDlpDownloader's module docstring for why.
 
         ``progress_callback``, when given, is awaited with a

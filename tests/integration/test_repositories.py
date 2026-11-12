@@ -4,11 +4,8 @@ Note: this is NOT a substitute for testing against real PostgreSQL —
 it's a fast local check that the ORM mapping and repository logic
 are self-consistent (create → read gives back the same data). Postgres-
 specific behavior (e.g. exact server_default semantics) is only verified
-when running via `docker compose up` with the real database, per
-PROJECT_SPEC §7: "infrastructure — integration tests through testcontainers
-(Postgres, Redis)". Testcontainers-based Postgres tests are a Day 3+ CI
-improvement once the project has a CI runner with Docker-in-Docker
-available — tracked, not skipped silently.
+by the migration tests, which run against PostgreSQL in their own CI
+job, and by live runs in Docker (docs/architecture.md, Testing strategy).
 """
 
 from __future__ import annotations

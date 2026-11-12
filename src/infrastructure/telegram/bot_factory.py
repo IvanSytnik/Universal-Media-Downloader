@@ -22,7 +22,7 @@ from src.config.settings import Settings
 
 def create_telegram_bot(settings: Settings) -> Bot:
     """Builds a Bot pointed at api.telegram.org, or at a local Bot API
-    server (see PROJECT_SPEC §6.2 — chosen over quality-reduction or
+    server (docs/architecture.md, Large-file delivery — chosen over quality-reduction or
     S3+link for large-file delivery) when `settings.use_local_bot_api`
     is set. The local server raises the upload limit from 50MB to
     2000MB; everything else about how `Bot` is used stays the same.

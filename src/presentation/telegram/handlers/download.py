@@ -27,8 +27,6 @@ it must not do so for a site the bot doesn't support.
 
 from __future__ import annotations
 
-from html import escape as html_escape
-
 from aiogram import Router
 from aiogram.types import Message
 from aiogram_i18n import I18nContext
@@ -74,7 +72,7 @@ async def handle_download(
             parts[1].strip(), settings.allowed_domains_set, settings.blocked_domains_set
         )
     except UnsupportedURLError as exc:
-        await message.answer(i18n.get("error-bad-url", reason=html_escape(str(exc))))
+        await message.answer(format_download_error(i18n, exc))
         return
     telegram_id = message.from_user.id
 
@@ -92,10 +90,7 @@ async def handle_download(
 
     try:
         preview = await use_cases.preview_download().execute(url)
-    except UnsupportedURLError as exc:
-        await status_message.edit_text(i18n.get("error-bad-url", reason=html_escape(str(exc))))
-        return
-    except ExtractionError as exc:
+    except (UnsupportedURLError, ExtractionError) as exc:
         await status_message.edit_text(format_download_error(i18n, exc))
         return
 
@@ -109,10 +104,7 @@ async def handle_download(
                 chat_id=status_message.chat.id,
                 message_id=status_message.message_id,
             )
-        except UnsupportedURLError as exc:
-            await status_message.edit_text(i18n.get("error-bad-url", reason=html_escape(str(exc))))
-            return
-        except FormatNotAllowedError as exc:
+        except (UnsupportedURLError, FormatNotAllowedError) as exc:
             await status_message.edit_text(format_download_error(i18n, exc))
             return
         except DownloadEnqueueError as exc:

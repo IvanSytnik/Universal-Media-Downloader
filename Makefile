@@ -45,5 +45,5 @@ down: ## Stop the stack (volumes are kept)
 logs: ## Follow bot and worker logs
 	$(COMPOSE) logs -f bot worker
 
-migrate: ## Apply Alembic migrations inside the running bot container
-	$(COMPOSE) exec bot alembic upgrade head
+migrate: ## Apply Alembic migrations (one-shot migrate service)
+	$(COMPOSE) run --rm migrate

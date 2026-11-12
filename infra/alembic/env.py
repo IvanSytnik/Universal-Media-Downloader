@@ -3,7 +3,7 @@
 DSN comes from `Settings` (same source as the app itself), not from a
 separate hardcoded value in alembic.ini — one source of truth for how
 to reach Postgres. Uses async engine + `run_sync` because the project's
-driver is asyncpg end-to-end (see PROJECT_SPEC — no sync driver anywhere).
+driver is asyncpg end-to-end (no sync driver anywhere).
 """
 
 from __future__ import annotations

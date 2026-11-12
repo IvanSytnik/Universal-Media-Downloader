@@ -3,7 +3,7 @@
 Everything locale-related is confined to this module so the rest of the
 Presentation layer only ever sees message *keys*, never raw strings, and
 the Application/Domain layers stay completely unaware that localization
-exists (Dependency Rule — see PROJECT_SPEC §3.1).
+exists (docs/architecture.md, Layers and the dependency rule).
 
 Three responsibilities:
 
@@ -44,7 +44,7 @@ _LOCALE_CACHE_PREFIX = "umd:locale:"
 
 # Buttons whose *text* drives routing (see keyboards.py / download_flow.py).
 # The handlers can't match on a single constant anymore — the same button
-# reads "⬇️ Скачать" or "⬇️ Download" depending on locale — so they match
+# reads differently in every locale (``btn-download``) — so they match
 # against the set of all translations of these keys instead.
 _BUTTON_KEYS: tuple[str, ...] = ("btn-download", "btn-help")
 

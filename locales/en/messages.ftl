@@ -71,6 +71,7 @@ preview-card =
     Author: { $uploader }
     Duration: { $duration }
     Type: { $mediatype }
+preview-title-unknown = Untitled
 preview-uploader-unknown = unknown
 preview-duration-unknown = unknown
 
@@ -86,11 +87,18 @@ flow-cancelled =
 
     ❌ Cancelled.
 flow-preview-stale = The preview has expired — send the link again.
+# Plain text that is not a link we route (no http:// or https://).
+hint-send-link = Send me a link that starts with https://
 
 # --- URL errors ---
-# error-bad-url: OUR allowlist validation. $reason is our own safe text,
-# not yt-dlp diagnostics. Keeps its parameter (Day 9).
-error-bad-url = Invalid link: { $reason }
+# OUR validation (url_validation.py), one key per rejection reason.
+# error-unsupported-site also covers BLOCKED_DOMAINS and yt-dlp's own
+# "Unsupported URL" — no list of sites there on purpose.
+error-url-empty = The link is empty.
+error-url-scheme = Only http:// and https:// links are supported.
+error-url-no-host = The link has no domain.
+# $domains — the allowlist, already joined (", ").
+error-url-domain-not-allowed = This site is not supported. Supported: { $domains }
 error-unsupported-site = This site is not supported
 
 # --- Download / extraction errors (Day 10) ---
@@ -127,9 +135,11 @@ error-format-not-allowed = This format isn't available for this site right now. 
 # $percent — an integer (0-100).
 progress-downloading = ⏳ Downloading… { $percent }%
 # For streams with no known total_bytes (percent = None): $mb is a
-# number, $speed is an already-formatted string like "1.2 MB/s" (same
-# pattern as $platforms in help-text).
+# number, $speed is an already-formatted string — progress-speed, or "?"
+# when unknown (same pattern as $platforms in help-text).
 progress-downloading-nostream = ⏳ Downloaded { $mb } MB ({ $speed })
+# $speed — MB/s as an already-formatted string ("1.2"), not a NUMBER.
+progress-speed = { $speed } MB/s
 # Day 11B.1 — the download→postprocess boundary, audio path (mp3) only.
 # No percentage: transcode-itself progress is out of scope.
 progress-converting = ⏳ Converting to MP3…

@@ -91,16 +91,19 @@ async def test_site_outside_the_allowlist_never_reaches_the_preview(i18n: Any) -
     assert provider.created == []
     # Refused before even the "download started" status message.
     (reply,) = message.sent
-    prefix = i18n.get("error-bad-url", reason="")
-    assert reply.text is not None and reply.text.startswith(prefix)
-    assert "youtube.com" in reply.text  # the validator's list of supported sites
+    supported = ", ".join(sorted(settings().allowed_domains))
+    assert reply.text == i18n.get("error-url-domain-not-allowed", domains=supported)
 
 
 @pytest.mark.parametrize(
-    "url", ["https://music.youtube.com/watch?v=x", "https://example.org/video"]
+    ("url", "expected_key"),
+    [
+        ("https://music.youtube.com/watch?v=x", "error-unsupported-site"),
+        ("https://example.org/video", "error-url-domain-not-allowed"),
+    ],
 )
 async def test_guided_flow_refuses_blocked_and_unlisted_sites_before_the_preview(
-    i18n: Any, url: str
+    i18n: Any, url: str, expected_key: str
 ) -> None:
     # Same gate on the other entry point (a pasted link).
     policy = FormatPolicy({})
@@ -121,7 +124,8 @@ async def test_guided_flow_refuses_blocked_and_unlisted_sites_before_the_preview
     assert provider.preview_use_case.urls == []
     assert store.calls == []
     (reply,) = message.sent
-    assert reply.text is not None and reply.text.startswith(i18n.get("error-bad-url", reason=""))
+    supported = ", ".join(sorted(settings().allowed_domains))
+    assert reply.text == i18n.get(expected_key, domains=supported)
 
 
 async def test_youtube_music_is_refused_before_the_preview(i18n: Any) -> None:
@@ -133,7 +137,9 @@ async def test_youtube_music_is_refused_before_the_preview(i18n: Any) -> None:
     assert provider.preview_use_case.urls == []
     assert provider.created == []
     (reply,) = message.sent
-    assert reply.text is not None and reply.text.startswith(i18n.get("error-bad-url", reason=""))
+    # Blocked subdomain of an allowed site: "not supported", and no list
+    # of supported sites that would name youtube.com.
+    assert reply.text == i18n.get("error-unsupported-site")
 
 
 async def test_unreachable_queue_turns_the_status_message_into_an_error(i18n: Any) -> None:
